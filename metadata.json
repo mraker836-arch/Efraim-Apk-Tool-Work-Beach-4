@@ -1,0 +1,6 @@
+{
+  "name": "EFRAIM APK WORKBENCH TOOL M",
+  "description": "EFRAIM APK WORKBENCH TOOL M - Local-First APK Build & Rebuild Engine with Diana AI, static APK inspection, DEX analysis, and cryptographic signing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
