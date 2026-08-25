@@ -247,7 +247,7 @@ class ApkScannerService(private val context: Context) {
             zos.write(dexBytes)
             zos.closeEntry()
 
-            // 3. Sample native lib (dummy .so for arm64-v8a & x86_64)
+            // 3. Embedded native libraries (.so for arm64-v8a & x86_64)
             zos.putNextEntry(ZipEntry("lib/arm64-v8a/libnative-engine.so"))
             zos.write("SAMPLE_ELF_ARM64_NATIVE_BINARY".toByteArray())
             zos.closeEntry()

@@ -1198,18 +1198,76 @@ fun ComponentItemCard(comp: com.example.apk.model.ComponentInfo) {
 
 @Composable
 fun DexItemCard(dex: com.example.apk.model.DexFileInfo) {
+    var expanded by remember { mutableStateOf(false) }
+
     Card(
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, SlateOutline)
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, SlateOutline),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text(dex.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(dex.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text(formatBytes(dex.sizeBytes), fontSize = 11.sp, color = TextMuted)
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("Classes: ${dex.classDefsCount}", fontSize = 11.sp, color = CyberCyan)
-                Text("Method IDs: ~${dex.methodIdsEstimate}", fontSize = 11.sp, color = TextSecondary)
+                Text("Methods: ~${dex.methodIdsEstimate}", fontSize = 11.sp, color = TextSecondary)
+                Text("Fields: ${dex.fieldIdsCount}", fontSize = 11.sp, color = TextSecondary)
                 Text("DEX v${dex.dexVersion}", fontSize = 11.sp, color = TextMuted)
+            }
+
+            if (dex.classNames.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(SlateSurfaceVariant)
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (expanded) "Hide Extracted Classes (${dex.classNames.size})" else "View Extracted Classes (${dex.classNames.size})",
+                        fontSize = 11.sp,
+                        color = CyberCyanLight
+                    )
+                    Text(
+                        text = if (expanded) "▲" else "▼",
+                        fontSize = 11.sp,
+                        color = CyberCyanLight
+                    )
+                }
+
+                if (expanded) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF0F172A))
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        dex.classNames.forEach { className ->
+                            Text(
+                                text = className,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = TextPrimary,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
             }
         }
     }

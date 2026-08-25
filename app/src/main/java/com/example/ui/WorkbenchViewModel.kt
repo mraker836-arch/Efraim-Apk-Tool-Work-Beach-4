@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.firstOrNull
 import com.example.ai.diana.DianaAnalysisReport
 import com.example.ai.diana.DianaApkAnalyzer
 import com.example.ai.inference.AiMode
@@ -245,8 +246,21 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         startTelemetryLoop()
         refreshKeys()
-        // Auto-load sample APK for immediate ready-to-test experience
-        loadSampleApk()
+        viewModelScope.launch {
+            try {
+                val latest = database.apkProjectDao().getAllProjects().firstOrNull()?.firstOrNull()
+                if (latest != null) {
+                    val file = File(latest.filePath)
+                    if (file.exists() && file.length() > 0) {
+                        val info = scannerService.scanApk(file)
+                        _currentApk.value = info
+                        runDianaAnalysis(info)
+                    }
+                }
+            } catch (_: Exception) {
+                // Keep clean state if no previous valid project
+            }
+        }
     }
 
     private fun startTelemetryLoop() {
@@ -498,9 +512,9 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
             var accumulatedText = ""
             var currentMetrics: InferenceMetrics? = null
 
-            // Add placeholder bot message
-            val placeholder = ChatMessage(id = botMsgId, sender = "diana", text = "Thinking...")
-            _chatMessages.value = _chatMessages.value + placeholder
+            // Add initial bot response bubble
+            val initialBotMessage = ChatMessage(id = botMsgId, sender = "diana", text = "Thinking...")
+            _chatMessages.value = _chatMessages.value + initialBotMessage
 
             inferenceService.generateStream(
                 prompt = fullPrompt,

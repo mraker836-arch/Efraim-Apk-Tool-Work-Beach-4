@@ -393,7 +393,7 @@ private fun SecurityScoreBannerCard(
             }
 
             Spacer(modifier = Modifier.height(14.dp))
-            Divider(color = SlateOutline)
+            androidx.compose.material3.HorizontalDivider(color = SlateOutline)
             Spacer(modifier = Modifier.height(10.dp))
 
             // Score explanation metrics row

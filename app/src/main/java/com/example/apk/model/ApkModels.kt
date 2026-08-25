@@ -38,7 +38,12 @@ data class DexFileInfo(
     val sizeBytes: Long,
     val classDefsCount: Int,
     val methodIdsEstimate: Int,
-    val dexVersion: String
+    val dexVersion: String,
+    val stringIdsCount: Int = 0,
+    val typeIdsCount: Int = 0,
+    val protoIdsCount: Int = 0,
+    val fieldIdsCount: Int = 0,
+    val classNames: List<String> = emptyList()
 )
 
 data class AssetFileInfo(

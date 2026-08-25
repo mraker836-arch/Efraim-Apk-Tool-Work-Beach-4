@@ -134,9 +134,8 @@ class InferenceService(private val context: Context) {
             // Cloud AI Mode via Gemini REST API
             val apiKey = BuildConfig.GEMINI_API_KEY
             if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-                // Fallback to local inference if API key is not configured
-                emit("[Notice: Cloud API Key not set in Secrets. Running via Local GGUF Engine]\n\n")
-                val localText = generateLocalGgufResponse(prompt, "Gemma-2-2B-Instruct-Q4_K_M.gguf")
+                emit("[Notice: Gemini Cloud API Key not configured in Secrets/Settings. Please provide a valid Gemini API Key to enable live cloud AI reasoning.]\n\n")
+                val localText = generateContextualAnalysis(prompt)
                 for (chunk in localText.chunked(12)) {
                     emit(chunk)
                     tokenCount += 3
@@ -154,7 +153,7 @@ class InferenceService(private val context: Context) {
 
                     onMetricsUpdated?.invoke(
                         InferenceMetrics(
-                            modelName = "gemini-3.5-flash",
+                            modelName = "gemini-2.5-flash",
                             isLocal = false,
                             loadTimeMs = 0L,
                             inferenceTimeMs = System.currentTimeMillis() - startTime,
@@ -171,12 +170,12 @@ class InferenceService(private val context: Context) {
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun generateLocalGgufResponse(prompt: String, modelName: String): String {
+    private fun generateContextualAnalysis(prompt: String): String {
         val lower = prompt.lowercase()
         return when {
             lower.contains("permission") || lower.contains("danger") -> {
                 "### DIANA Permission Security Audit\n" +
-                "- **Privilege Boundary**: The declared permissions were analyzed against Android 14/15 sandbox boundaries.\n" +
+                "- **Privilege Boundary**: Evaluated against standard Android sandbox boundaries.\n" +
                 "- **Critical vectors**: Ensure any SMS, Location, or Storage access is strictly mediated through Android PhotoPicker or Storage Access Framework.\n" +
                 "- **Rebuild Recommendation**: You can safely strip non-essential runtime permissions in the Rebuild Workspace without modifying Dalvik bytecode."
             }
@@ -197,16 +196,20 @@ class InferenceService(private val context: Context) {
                 "- **Digest Verification**: Every APK entry digest is verified against `META-INF/MANIFEST.MF` to guarantee integrity."
             }
             else -> {
-                "### DIANA AI Analysis Report\n" +
-                "- **Status**: Structured inspection data processed successfully.\n" +
-                "- **Architecture**: Package structure and DEX binaries are intact.\n" +
-                "- **Recommended Next Steps**: Review the Rebuild Workspace to adjust target API levels, customize asset configurations, or generate a freshly signed distribution APK."
+                "### DIANA APK Triage Report\n" +
+                "- **Context**: Static analysis details processed.\n" +
+                "- **Architecture**: Package structure and DEX binaries are analyzed.\n" +
+                "- **Recommended Next Steps**: Review the APK Lab tabs (Manifest, Permissions, DEX, Assets, Signing) for detailed technical breakdowns."
             }
         }
     }
 
+    private fun generateLocalGgufResponse(prompt: String, modelName: String): String {
+        return generateContextualAnalysis(prompt)
+    }
+
     private suspend fun callGeminiRestApi(prompt: String, apiKey: String, config: InferenceConfig): String = withContext(Dispatchers.IO) {
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
 
         val jsonBody = JSONObject().apply {
             val contentsArray = JSONArray().apply {

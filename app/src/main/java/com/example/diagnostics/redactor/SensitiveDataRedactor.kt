@@ -27,7 +27,7 @@ object SensitiveDataRedactor {
         var result = input
 
         for (pattern in PATTERNS) {
-            val matcher = pattern.matcher(result)
+            val matcher = pattern.matcher(result as CharSequence)
             val sb = StringBuffer()
             while (matcher.find()) {
                 val matched = matcher.group()

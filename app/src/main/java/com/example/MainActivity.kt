@@ -2,6 +2,7 @@ package com.example
 
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -63,22 +64,35 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 val currentTab by viewModel.selectedTab.collectAsState()
 
-                // File picker launcher for APK files
+                // File picker launcher using Storage Access Framework (ACTION_OPEN_DOCUMENT)
                 val apkPickerLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.GetContent()
-                ) { uri: Uri? ->
-                    if (uri != null) {
-                        val fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "imported_app.apk"
-                        viewModel.importApkFromUri(uri, fileName)
-                    }
-                }
+                     contract = ActivityResultContracts.OpenDocument()
+                 ) { uri: Uri? ->
+                     if (uri != null) {
+                         var fileName = "imported_app.apk"
+                         try {
+                             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                                 val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                 if (nameIndex != -1 && cursor.moveToFirst()) {
+                                     val queriedName = cursor.getString(nameIndex)
+                                     if (!queriedName.isNullOrBlank()) {
+                                         fileName = queriedName
+                                     }
+                                 }
+                             }
+                         } catch (e: Exception) {
+                             fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "imported_app.apk"
+                         }
+                         viewModel.importApkFromUri(uri, fileName)
+                     }
+                 }
 
-                WorkbenchApp(
-                    viewModel = viewModel,
-                    currentTab = currentTab,
-                    onTabSelected = { viewModel.selectTab(it) },
-                    onImportApkClick = { apkPickerLauncher.launch("application/vnd.android.package-archive") }
-                )
+                 WorkbenchApp(
+                     viewModel = viewModel,
+                     currentTab = currentTab,
+                     onTabSelected = { viewModel.selectTab(it) },
+                     onImportApkClick = { apkPickerLauncher.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*")) }
+                 )
             }
         }
     }

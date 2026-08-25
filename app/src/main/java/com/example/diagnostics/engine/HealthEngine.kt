@@ -130,8 +130,8 @@ class HealthEngine(private val context: Context) {
     private fun evaluateDatabaseHealth(): ComponentHealth {
         return try {
             val db = AppDatabase.getDatabase(context)
-            val isOpen = db.isOpen || db.openHelper.writableDatabase != null
-            if (isOpen) {
+            val isDbReady = db.openHelper.writableDatabase.isOpen
+            if (isDbReady) {
                 ComponentHealth("DATABASE", HealthState.HEALTHY, "SQLite Room DB active (v1, WAL enabled)")
             } else {
                 ComponentHealth("DATABASE", HealthState.DEGRADED, "Database initializing")
