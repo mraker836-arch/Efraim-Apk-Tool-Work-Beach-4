@@ -10,6 +10,14 @@ import java.nio.ByteOrder
  */
 class AxmlParser {
 
+    data class ComponentDetail(
+        val type: String,
+        val name: String,
+        val exported: Boolean,
+        val permission: String? = null,
+        val intentActions: List<String> = emptyList()
+    )
+
     data class ParsedManifest(
         val packageName: String,
         val appName: String,
@@ -21,11 +29,13 @@ class AxmlParser {
         val isDebuggable: Boolean,
         val allowsBackup: Boolean,
         val supportsRtl: Boolean,
+        val usesCleartextTraffic: Boolean = false,
+        val networkSecurityConfig: String? = null,
         val permissions: List<String>,
-        val activities: List<String>,
-        val services: List<String>,
-        val receivers: List<String>,
-        val providers: List<String>,
+        val activities: List<ComponentDetail>,
+        val services: List<ComponentDetail>,
+        val receivers: List<ComponentDetail>,
+        val providers: List<ComponentDetail>,
         val rawXmlText: String
     )
 
@@ -49,15 +59,47 @@ class AxmlParser {
         var isDebuggable = false
         var allowsBackup = true
         var supportsRtl = true
+        var usesCleartextTraffic = false
+        var networkSecurityConfig: String? = null
 
         val permissions = mutableListOf<String>()
-        val activities = mutableListOf<String>()
-        val services = mutableListOf<String>()
-        val receivers = mutableListOf<String>()
-        val providers = mutableListOf<String>()
+        val activities = mutableListOf<ComponentDetail>()
+        val services = mutableListOf<ComponentDetail>()
+        val receivers = mutableListOf<ComponentDetail>()
+        val providers = mutableListOf<ComponentDetail>()
 
         val xmlBuilder = StringBuilder()
-        var currentElement = ""
+
+        var currentComponentType: String? = null
+        var currentComponentName: String = ""
+        var currentComponentExported: Boolean? = null
+        var currentComponentPermission: String? = null
+        val currentComponentActions = mutableListOf<String>()
+
+        fun finalizeCurrentComponent() {
+            val type = currentComponentType ?: return
+            val name = currentComponentName.ifBlank { "Unknown$type" }
+            val hasActions = currentComponentActions.isNotEmpty()
+            val isExported = currentComponentExported ?: (hasActions || type == "Activity")
+            val detail = ComponentDetail(
+                type = type,
+                name = name,
+                exported = isExported,
+                permission = currentComponentPermission,
+                intentActions = currentComponentActions.toList()
+            )
+            when (type) {
+                "Activity" -> activities.add(detail)
+                "Service" -> services.add(detail)
+                "Receiver" -> receivers.add(detail)
+                "Provider" -> providers.add(detail)
+            }
+            currentComponentType = null
+            currentComponentName = ""
+            currentComponentExported = null
+            currentComponentPermission = null
+            currentComponentActions.clear()
+        }
 
         while (buffer.hasRemaining()) {
             val chunkStart = buffer.position()
@@ -76,7 +118,7 @@ class AxmlParser {
                     stringPool = parseStringPool(buffer, chunkStart, chunkSize)
                     buffer.position(chunkStart + chunkSize)
                 }
-                0x0180 -> { // Resource IDs map
+                0x0180, 0x0080 -> { // Resource IDs map
                     buffer.position(chunkStart + chunkSize)
                 }
                 0x0100 -> { // Start Namespace
@@ -98,7 +140,6 @@ class AxmlParser {
                     val styleIndex = buffer.short.toInt() and 0xFFFF
 
                     val tagName = stringPool.getOrNull(nameIdx) ?: "unknown"
-                    currentElement = tagName
                     xmlBuilder.append("<$tagName")
 
                     val attributes = mutableMapOf<String, String>()
@@ -119,43 +160,69 @@ class AxmlParser {
 
                         attributes[attrName] = attrValue
                         xmlBuilder.append(" $attrName=\"$attrValue\"")
+                    }
+                    xmlBuilder.append(">\n")
 
-                        // Extract core manifest properties
-                        when (tagName) {
-                            "manifest" -> {
-                                if (attrName == "package") packageName = attrValue
-                                if (attrName == "versionName") versionName = attrValue
-                                if (attrName == "versionCode") versionCode = attrData.toLong().let { if (it > 0) it else (attrValue.toLongOrNull() ?: 1L) }
-                                if (attrName == "compileSdkVersion") compileSdk = attrData.let { if (it > 0) it else (attrValue.toIntOrNull()) }
-                            }
-                            "uses-sdk" -> {
-                                if (attrName == "minSdkVersion") minSdk = attrData.let { if (it > 0) it else (attrValue.toIntOrNull() ?: 21) }
-                                if (attrName == "targetSdkVersion") targetSdk = attrData.let { if (it > 0) it else (attrValue.toIntOrNull() ?: 34) }
-                            }
-                            "application" -> {
-                                if (attrName == "label") appName = attrValue
-                                if (attrName == "debuggable") isDebuggable = (attrData != 0 || attrValue.equals("true", ignoreCase = true))
-                                if (attrName == "allowBackup") allowsBackup = (attrData != 0 || attrValue.equals("true", ignoreCase = true))
-                                if (attrName == "supportsRtl") supportsRtl = (attrData != 0 || attrValue.equals("true", ignoreCase = true))
-                            }
-                            "uses-permission" -> {
-                                if (attrName == "name" && attrValue.isNotBlank()) permissions.add(attrValue)
-                            }
-                            "activity", "activity-alias" -> {
-                                if (attrName == "name" && attrValue.isNotBlank()) activities.add(attrValue)
-                            }
-                            "service" -> {
-                                if (attrName == "name" && attrValue.isNotBlank()) services.add(attrValue)
-                            }
-                            "receiver" -> {
-                                if (attrName == "name" && attrValue.isNotBlank()) receivers.add(attrValue)
-                            }
-                            "provider" -> {
-                                if (attrName == "name" && attrValue.isNotBlank()) providers.add(attrValue)
+                    // Extract core manifest properties
+                    when (tagName) {
+                        "manifest" -> {
+                            attributes["package"]?.let { if (it.isNotBlank()) packageName = it }
+                            attributes["versionName"]?.let { if (it.isNotBlank()) versionName = it }
+                            attributes["versionCode"]?.toLongOrNull()?.let { if (it > 0) versionCode = it }
+                            attributes["compileSdkVersion"]?.toIntOrNull()?.let { if (it > 0) compileSdk = it }
+                        }
+                        "uses-sdk" -> {
+                            attributes["minSdkVersion"]?.toIntOrNull()?.let { if (it > 0) minSdk = it }
+                            attributes["targetSdkVersion"]?.toIntOrNull()?.let { if (it > 0) targetSdk = it }
+                        }
+                        "application" -> {
+                            attributes["label"]?.let { if (it.isNotBlank()) appName = it }
+                            attributes["debuggable"]?.let { isDebuggable = it.equals("true", ignoreCase = true) || it == "1" }
+                            attributes["allowBackup"]?.let { allowsBackup = it.equals("true", ignoreCase = true) || it == "1" }
+                            attributes["supportsRtl"]?.let { supportsRtl = it.equals("true", ignoreCase = true) || it == "1" }
+                            attributes["usesCleartextTraffic"]?.let { usesCleartextTraffic = it.equals("true", ignoreCase = true) || it == "1" }
+                            attributes["networkSecurityConfig"]?.let { networkSecurityConfig = it }
+                        }
+                        "uses-permission" -> {
+                            val perm = attributes["name"] ?: attributes["permission"]
+                            if (!perm.isNullOrBlank()) permissions.add(perm)
+                        }
+                        "activity", "activity-alias" -> {
+                            finalizeCurrentComponent()
+                            currentComponentType = "Activity"
+                            currentComponentName = attributes["name"] ?: ""
+                            currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentPermission = attributes["permission"]
+                        }
+                        "service" -> {
+                            finalizeCurrentComponent()
+                            currentComponentType = "Service"
+                            currentComponentName = attributes["name"] ?: ""
+                            currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentPermission = attributes["permission"]
+                        }
+                        "receiver" -> {
+                            finalizeCurrentComponent()
+                            currentComponentType = "Receiver"
+                            currentComponentName = attributes["name"] ?: ""
+                            currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentPermission = attributes["permission"]
+                        }
+                        "provider" -> {
+                            finalizeCurrentComponent()
+                            currentComponentType = "Provider"
+                            currentComponentName = attributes["name"] ?: ""
+                            currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentPermission = attributes["permission"]
+                        }
+                        "action" -> {
+                            val actionName = attributes["name"]
+                            if (!actionName.isNullOrBlank()) {
+                                currentComponentActions.add(actionName)
                             }
                         }
                     }
-                    xmlBuilder.append(">\n")
+
                     buffer.position(chunkStart + chunkSize)
                 }
                 0x0103 -> { // End Element
@@ -165,6 +232,11 @@ class AxmlParser {
                     val nameIdx = buffer.int
                     val tagName = stringPool.getOrNull(nameIdx) ?: "unknown"
                     xmlBuilder.append("</$tagName>\n")
+
+                    if (tagName in listOf("activity", "activity-alias", "service", "receiver", "provider")) {
+                        finalizeCurrentComponent()
+                    }
+
                     buffer.position(chunkStart + chunkSize)
                 }
                 0x0104 -> { // CDATA
@@ -175,6 +247,8 @@ class AxmlParser {
                 }
             }
         }
+
+        finalizeCurrentComponent()
 
         if (appName.isBlank()) {
             appName = packageName.substringAfterLast(".").replaceFirstChar { it.uppercase() }
@@ -191,11 +265,13 @@ class AxmlParser {
             isDebuggable = isDebuggable,
             allowsBackup = allowsBackup,
             supportsRtl = supportsRtl,
+            usesCleartextTraffic = usesCleartextTraffic,
+            networkSecurityConfig = networkSecurityConfig,
             permissions = permissions.distinct(),
-            activities = activities.distinct(),
-            services = services.distinct(),
-            receivers = receivers.distinct(),
-            providers = providers.distinct(),
+            activities = activities.distinctBy { it.name },
+            services = services.distinctBy { it.name },
+            receivers = receivers.distinctBy { it.name },
+            providers = providers.distinctBy { it.name },
             rawXmlText = xmlBuilder.toString()
         )
     }
@@ -235,7 +311,6 @@ class AxmlParser {
     }
 
     private fun readUtf8String(buffer: ByteBuffer): String {
-        // Read length (length may be encoded in 1 or 2 bytes)
         var charLen = buffer.get().toInt() and 0xFF
         if ((charLen and 0x80) != 0) {
             charLen = ((charLen and 0x7F) shl 8) or (buffer.get().toInt() and 0xFF)

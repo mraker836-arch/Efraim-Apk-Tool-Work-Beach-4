@@ -153,16 +153,16 @@ class ApkScannerService(private val context: Context) {
         }
 
         for (act in manifest.activities) {
-            activities.add(ComponentInfo(type = "Activity", name = act, exported = true))
+            activities.add(ComponentInfo(type = "Activity", name = act.name, exported = act.exported, permission = act.permission, intentActions = act.intentActions))
         }
         for (srv in manifest.services) {
-            services.add(ComponentInfo(type = "Service", name = srv))
+            services.add(ComponentInfo(type = "Service", name = srv.name, exported = srv.exported, permission = srv.permission, intentActions = srv.intentActions))
         }
         for (rec in manifest.receivers) {
-            receivers.add(ComponentInfo(type = "Receiver", name = rec))
+            receivers.add(ComponentInfo(type = "Receiver", name = rec.name, exported = rec.exported, permission = rec.permission, intentActions = rec.intentActions))
         }
         for (prv in manifest.providers) {
-            providers.add(ComponentInfo(type = "Provider", name = prv))
+            providers.add(ComponentInfo(type = "Provider", name = prv.name, exported = prv.exported, permission = prv.permission, intentActions = prv.intentActions))
         }
 
         val signingStatus = when {
