@@ -1,12 +1,11 @@
 package com.example.apk.scanner
 
-import java.io.ByteArrayInputStream
-import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * High performance, zero-dependency Android Binary XML (AXML) decoder and editor helper.
+ * High performance, zero-dependency Android Binary XML (AXML) decoder.
+ * Decodes AndroidManifest.xml from raw compiled APK binary XML format.
  */
 class AxmlParser {
 
@@ -15,7 +14,8 @@ class AxmlParser {
         val name: String,
         val exported: Boolean,
         val permission: String? = null,
-        val intentActions: List<String> = emptyList()
+        val intentActions: List<String> = emptyList(),
+        val intentCategories: List<String> = emptyList()
     )
 
     data class ParsedManifest(
@@ -31,15 +31,25 @@ class AxmlParser {
         val supportsRtl: Boolean,
         val usesCleartextTraffic: Boolean = false,
         val networkSecurityConfig: String? = null,
+        val theme: String? = null,
         val permissions: List<String>,
+        val usesFeatures: List<String> = emptyList(),
         val activities: List<ComponentDetail>,
         val services: List<ComponentDetail>,
         val receivers: List<ComponentDetail>,
         val providers: List<ComponentDetail>,
+        val intentFiltersCount: Int = 0,
         val rawXmlText: String
-    )
+    ) {
+        val allComponents: List<ComponentDetail> get() = activities + services + receivers + providers
+        val exportedComponentsCount: Int get() = allComponents.count { it.exported }
+    }
 
     fun parse(bytes: ByteArray): ParsedManifest {
+        if (bytes.size < 8) {
+            return fallbackManifest("Malformed or empty manifest binary")
+        }
+
         val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
 
         // Read header
@@ -51,7 +61,7 @@ class AxmlParser {
 
         var packageName = ""
         var appName = ""
-        var versionName = "1.0"
+        var versionName = "Unavailable"
         var versionCode = 1L
         var minSdk = 21
         var targetSdk = 34
@@ -61,8 +71,10 @@ class AxmlParser {
         var supportsRtl = true
         var usesCleartextTraffic = false
         var networkSecurityConfig: String? = null
+        var theme: String? = null
 
         val permissions = mutableListOf<String>()
+        val usesFeatures = mutableListOf<String>()
         val activities = mutableListOf<ComponentDetail>()
         val services = mutableListOf<ComponentDetail>()
         val receivers = mutableListOf<ComponentDetail>()
@@ -75,18 +87,22 @@ class AxmlParser {
         var currentComponentExported: Boolean? = null
         var currentComponentPermission: String? = null
         val currentComponentActions = mutableListOf<String>()
+        val currentComponentCategories = mutableListOf<String>()
+        var totalIntentFilters = 0
 
         fun finalizeCurrentComponent() {
             val type = currentComponentType ?: return
             val name = currentComponentName.ifBlank { "Unknown$type" }
             val hasActions = currentComponentActions.isNotEmpty()
+            // In Android, if exported is omitted: true if intent filters present, false otherwise
             val isExported = currentComponentExported ?: (hasActions || type == "Activity")
             val detail = ComponentDetail(
                 type = type,
                 name = name,
                 exported = isExported,
                 permission = currentComponentPermission,
-                intentActions = currentComponentActions.toList()
+                intentActions = currentComponentActions.toList(),
+                intentCategories = currentComponentCategories.toList()
             )
             when (type) {
                 "Activity" -> activities.add(detail)
@@ -99,6 +115,7 @@ class AxmlParser {
             currentComponentExported = null
             currentComponentPermission = null
             currentComponentActions.clear()
+            currentComponentCategories.clear()
         }
 
         while (buffer.hasRemaining()) {
@@ -152,10 +169,18 @@ class AxmlParser {
                         val attrData = buffer.int
 
                         val attrName = stringPool.getOrNull(attrNameIdx) ?: "attr_$i"
+
                         val attrValue = if (attrRawValueIdx >= 0 && attrRawValueIdx < stringPool.size) {
                             stringPool[attrRawValueIdx]
                         } else {
-                            attrData.toString()
+                            when (attrType) {
+                                0x03 -> stringPool.getOrNull(attrData) ?: attrData.toString()
+                                0x12 -> if (attrData != 0) "true" else "false"
+                                0x10, 0x11 -> attrData.toString()
+                                0x01 -> "@0x${Integer.toHexString(attrData)}"
+                                0x02 -> "?0x${Integer.toHexString(attrData)}"
+                                else -> attrData.toString()
+                            }
                         }
 
                         attributes[attrName] = attrValue
@@ -182,10 +207,18 @@ class AxmlParser {
                             attributes["supportsRtl"]?.let { supportsRtl = it.equals("true", ignoreCase = true) || it == "1" }
                             attributes["usesCleartextTraffic"]?.let { usesCleartextTraffic = it.equals("true", ignoreCase = true) || it == "1" }
                             attributes["networkSecurityConfig"]?.let { networkSecurityConfig = it }
+                            attributes["theme"]?.let { theme = it }
                         }
-                        "uses-permission" -> {
+                        "uses-permission", "uses-permission-sdk-23" -> {
                             val perm = attributes["name"] ?: attributes["permission"]
                             if (!perm.isNullOrBlank()) permissions.add(perm)
+                        }
+                        "uses-feature" -> {
+                            val feat = attributes["name"] ?: attributes["feature"]
+                            if (!feat.isNullOrBlank()) {
+                                val req = attributes["required"]?.let { if (it == "false") " (optional)" else " (required)" } ?: " (required)"
+                                usesFeatures.add("$feat$req")
+                            }
                         }
                         "activity", "activity-alias" -> {
                             finalizeCurrentComponent()
@@ -215,10 +248,19 @@ class AxmlParser {
                             currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
                             currentComponentPermission = attributes["permission"]
                         }
+                        "intent-filter" -> {
+                            totalIntentFilters++
+                        }
                         "action" -> {
                             val actionName = attributes["name"]
                             if (!actionName.isNullOrBlank()) {
                                 currentComponentActions.add(actionName)
+                            }
+                        }
+                        "category" -> {
+                            val catName = attributes["name"]
+                            if (!catName.isNullOrBlank()) {
+                                currentComponentCategories.add(catName)
                             }
                         }
                     }
@@ -251,11 +293,11 @@ class AxmlParser {
         finalizeCurrentComponent()
 
         if (appName.isBlank()) {
-            appName = packageName.substringAfterLast(".").replaceFirstChar { it.uppercase() }
+            appName = if (packageName.isNotBlank()) packageName.substringAfterLast(".").replaceFirstChar { it.uppercase() } else "Unavailable"
         }
 
         return ParsedManifest(
-            packageName = if (packageName.isNotBlank()) packageName else "com.example.app",
+            packageName = if (packageName.isNotBlank()) packageName else "Unavailable",
             appName = appName,
             versionName = versionName,
             versionCode = versionCode,
@@ -267,12 +309,41 @@ class AxmlParser {
             supportsRtl = supportsRtl,
             usesCleartextTraffic = usesCleartextTraffic,
             networkSecurityConfig = networkSecurityConfig,
+            theme = theme,
             permissions = permissions.distinct(),
+            usesFeatures = usesFeatures.distinct(),
             activities = activities.distinctBy { it.name },
             services = services.distinctBy { it.name },
             receivers = receivers.distinctBy { it.name },
             providers = providers.distinctBy { it.name },
+            intentFiltersCount = totalIntentFilters,
             rawXmlText = xmlBuilder.toString()
+        )
+    }
+
+    private fun fallbackManifest(reason: String): ParsedManifest {
+        return ParsedManifest(
+            packageName = "Unavailable",
+            appName = "Unavailable",
+            versionName = "Unavailable",
+            versionCode = 0L,
+            minSdk = 0,
+            targetSdk = 0,
+            compileSdk = null,
+            isDebuggable = false,
+            allowsBackup = false,
+            supportsRtl = false,
+            usesCleartextTraffic = false,
+            networkSecurityConfig = null,
+            theme = null,
+            permissions = emptyList(),
+            usesFeatures = emptyList(),
+            activities = emptyList(),
+            services = emptyList(),
+            receivers = emptyList(),
+            providers = emptyList(),
+            intentFiltersCount = 0,
+            rawXmlText = "<!-- $reason -->"
         )
     }
 
@@ -295,15 +366,19 @@ class AxmlParser {
 
         for (i in 0 until stringCount) {
             val offset = stringsBase + stringOffsets[i]
-            if (offset >= chunkStart + chunkSize) {
+            if (offset >= chunkStart + chunkSize || offset < 0) {
                 strings.add("")
                 continue
             }
             buffer.position(offset)
-            val str = if (isUtf8) {
-                readUtf8String(buffer)
-            } else {
-                readUtf16String(buffer)
+            val str = try {
+                if (isUtf8) {
+                    readUtf8String(buffer)
+                } else {
+                    readUtf16String(buffer)
+                }
+            } catch (_: Exception) {
+                ""
             }
             strings.add(str)
         }

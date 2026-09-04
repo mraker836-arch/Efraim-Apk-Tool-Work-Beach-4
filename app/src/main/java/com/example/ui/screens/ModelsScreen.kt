@@ -18,15 +18,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -46,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.models.GgufModelInfo
+import com.example.ai.models.ServerConnectionState
 import com.example.ui.WorkbenchViewModel
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CyberCyan
@@ -62,7 +70,16 @@ import com.example.ui.theme.TextSecondary
 @Composable
 fun ModelsScreen(viewModel: WorkbenchViewModel) {
     val modelsList by viewModel.modelsList.collectAsState()
+    val serverState by viewModel.modelServerState.collectAsState()
+    val statusMessage by viewModel.modelStatusMessage.collectAsState()
     val systemMetrics by viewModel.systemMetrics.collectAsState()
+    val config = viewModel.inferenceService.getPrivateBrainConfig()
+
+    LaunchedEffect(Unit) {
+        if (viewModel.inferenceService.isConfigured()) {
+            viewModel.refreshModels()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -74,12 +91,140 @@ fun ModelsScreen(viewModel: WorkbenchViewModel) {
     ) {
         // Header
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Memory, contentDescription = null, tint = ElectricPurple, modifier = Modifier.size(26.dp))
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text("ON-DEVICE GGUF MODEL MANAGER", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Text("Manage quantized local neural weights for offline DIANA inference", fontSize = 12.sp, color = TextSecondary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Dns,
+                        contentDescription = null,
+                        tint = CyberCyan,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            "PRIVATE BRAIN MODEL MANAGER",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            "Real private LLM inference models (Ollama & OpenAI-compatible)",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = { viewModel.refreshModels() },
+                    modifier = Modifier.testTag("refresh_models_button")
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Refresh Models",
+                        tint = CyberCyan
+                    )
+                }
+            }
+        }
+
+        // Server Status & Connection Banner
+        item {
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    when (serverState) {
+                        ServerConnectionState.AVAILABLE -> NeonEmerald.copy(alpha = 0.5f)
+                        ServerConnectionState.CHECKING -> CyberCyan.copy(alpha = 0.5f)
+                        ServerConnectionState.UNCONFIGURED -> SlateOutline
+                        ServerConnectionState.AUTHENTICATION_ERROR -> AmberWarning.copy(alpha = 0.5f)
+                        else -> Color(0xFFFF5252).copy(alpha = 0.5f)
+                    }
+                )
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = when (serverState) {
+                                    ServerConnectionState.AVAILABLE -> Icons.Default.CheckCircle
+                                    ServerConnectionState.CHECKING -> Icons.Default.Refresh
+                                    ServerConnectionState.UNCONFIGURED -> Icons.Default.HelpOutline
+                                    ServerConnectionState.AUTHENTICATION_ERROR -> Icons.Default.Warning
+                                    else -> Icons.Default.Error
+                                },
+                                contentDescription = null,
+                                tint = when (serverState) {
+                                    ServerConnectionState.AVAILABLE -> NeonEmerald
+                                    ServerConnectionState.CHECKING -> CyberCyan
+                                    ServerConnectionState.UNCONFIGURED -> TextMuted
+                                    ServerConnectionState.AUTHENTICATION_ERROR -> AmberWarning
+                                    else -> Color(0xFFFF5252)
+                                },
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = when (serverState) {
+                                    ServerConnectionState.AVAILABLE -> "SERVER CONNECTED"
+                                    ServerConnectionState.CHECKING -> "CHECKING SERVER..."
+                                    ServerConnectionState.UNCONFIGURED -> "SERVER NOT CONFIGURED"
+                                    ServerConnectionState.AUTHENTICATION_ERROR -> "AUTH ERROR"
+                                    ServerConnectionState.UNAVAILABLE -> "SERVER UNAVAILABLE"
+                                    ServerConnectionState.MODEL_NOT_FOUND -> "MODEL NOT FOUND"
+                                    ServerConnectionState.ERROR -> "SERVER ERROR"
+                                },
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (serverState) {
+                                    ServerConnectionState.AVAILABLE -> NeonEmerald
+                                    ServerConnectionState.CHECKING -> CyberCyan
+                                    ServerConnectionState.UNCONFIGURED -> TextMuted
+                                    ServerConnectionState.AUTHENTICATION_ERROR -> AmberWarning
+                                    else -> Color(0xFFFF5252)
+                                }
+                            )
+                        }
+
+                        Button(
+                            onClick = { viewModel.testModelServerConnection() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SlateSurfaceVariant,
+                                contentColor = CyberCyan
+                            ),
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text("Test Connection", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = statusMessage,
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
+
+                    if (config.baseUrl.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Endpoint: ${config.baseUrl} (${config.serverType.name})",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = TextMuted
+                        )
+                    }
                 }
             }
         }
@@ -100,33 +245,103 @@ fun ModelsScreen(viewModel: WorkbenchViewModel) {
                 ) {
                     Column {
                         Text("JVM RAM In Use", fontSize = 11.sp, color = TextMuted)
-                        Text("${systemMetrics.allocatedRamMb} MB / ${systemMetrics.maxRamMb} MB", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CyberCyan)
+                        Text(
+                            "${systemMetrics.allocatedRamMb} MB / ${systemMetrics.maxRamMb} MB",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CyberCyan
+                        )
                     }
                     Column {
                         Text("Flash Storage Free", fontSize = 11.sp, color = TextMuted)
-                        Text("${systemMetrics.availableStorageMb} MB", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = NeonEmerald)
+                        Text(
+                            "${systemMetrics.availableStorageMb} MB",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NeonEmerald
+                        )
                     }
                     Column {
-                        Text("Quantization", fontSize = 11.sp, color = TextMuted)
-                        Text("Q4_K_M (4-bit)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = ElectricPurple)
+                        Text("Active Models", fontSize = 11.sp, color = TextMuted)
+                        Text(
+                            "${modelsList.size} Discovered",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ElectricPurple
+                        )
                     }
                 }
             }
         }
 
         item {
-            Text("MODEL CATALOG", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextMuted, letterSpacing = 1.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "DISCOVERED MODELS",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextMuted,
+                    letterSpacing = 1.sp
+                )
+                if (serverState == ServerConnectionState.CHECKING) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = CyberCyan, strokeWidth = 2.dp)
+                }
+            }
         }
 
-        items(modelsList) { model ->
-            GgufModelCard(
-                model = model,
-                onLoadClick = { viewModel.loadModel(model.id) },
-                onUnloadClick = { viewModel.unloadModel(model.id) },
-                onDownloadClick = { viewModel.downloadModel(model.id) },
-                onDeleteClick = { viewModel.deleteModel(model.id) },
-                onSetDefaultClick = { viewModel.setDefaultModel(model.id) }
-            )
+        if (modelsList.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Memory,
+                            contentDescription = null,
+                            tint = TextMuted,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "No Server Models Discovered",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = TextPrimary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            if (viewModel.inferenceService.isConfigured())
+                                "Ensure your private Ollama or OpenAI-compatible server is running and accessible at the configured URL."
+                            else
+                                "Private Brain is unconfigured. Go to Settings to configure your private LLM server endpoint.",
+                            fontSize = 12.sp,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                    }
+                }
+            }
+        } else {
+            items(modelsList) { model ->
+                GgufModelCard(
+                    model = model,
+                    onLoadClick = { viewModel.loadModel(model.id) },
+                    onUnloadClick = { viewModel.unloadModel(model.id) },
+                    onDownloadClick = { viewModel.downloadModel(model.id) },
+                    onDeleteClick = { viewModel.deleteModel(model.id) },
+                    onSetDefaultClick = { viewModel.setDefaultModel(model.id) }
+                )
+            }
         }
     }
 }
@@ -159,18 +374,34 @@ fun GgufModelCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(model.name, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text(
+                            model.name,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
                         if (model.isDefault) {
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = AmberWarning.copy(alpha = 0.2f)
                             ) {
-                                Text("DEFAULT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = AmberWarning, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                Text(
+                                    "DEFAULT",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AmberWarning,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
                             }
                         }
                     }
-                    Text(model.fileName, fontSize = 11.sp, color = CyberCyan, fontFamily = FontFamily.Monospace)
+                    Text(
+                        model.fileName,
+                        fontSize = 11.sp,
+                        color = CyberCyan,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
 
                 // Status chip
@@ -184,9 +415,9 @@ fun GgufModelCard(
                 ) {
                     Text(
                         text = when {
-                            model.isLoaded -> "LOADED IN RAM"
-                            model.isDownloaded -> "DOWNLOADED"
-                            else -> "AVAILABLE"
+                            model.isLoaded -> "ACTIVE SESSION"
+                            model.isDownloaded -> "READY ON SERVER"
+                            else -> "SERVER HOSTED"
                         },
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -202,7 +433,12 @@ fun GgufModelCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Text(model.description, fontSize = 12.sp, color = TextSecondary, lineHeight = 16.sp)
+            Text(
+                model.description.ifEmpty { "Verified model available on private inference server." },
+                fontSize = 12.sp,
+                color = TextSecondary,
+                lineHeight = 16.sp
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -211,10 +447,9 @@ fun GgufModelCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SpecBadge("Size", model.sizeDisplay)
+                SpecBadge("Backend", model.format)
                 SpecBadge("Quant", model.quantization)
                 SpecBadge("Context", "${model.contextLength} tokens")
-                SpecBadge("RAM Req", "~${model.ramRequirementMb} MB")
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -228,32 +463,34 @@ fun GgufModelCard(
                 if (model.isLoaded) {
                     Button(
                         onClick = onUnloadClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = SlateSurfaceVariant, contentColor = TextPrimary),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SlateSurfaceVariant,
+                            contentColor = TextPrimary
+                        ),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Unload RAM")
-                    }
-                } else if (model.isDownloaded) {
-                    Button(
-                        onClick = onLoadClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = Color(0xFF00363B)),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Load to RAM", fontWeight = FontWeight.Bold)
+                        Text("Disconnect Session")
                     }
                 } else {
                     Button(
-                        onClick = onDownloadClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = CyberCyanDark, contentColor = CyberCyan),
+                        onClick = onLoadClick,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CyberCyan,
+                            contentColor = Color(0xFF00363B)
+                        ),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Download Model")
+                        Text("Connect / Use Model", fontWeight = FontWeight.Bold)
                     }
                 }
 
-                if (model.isDownloaded && !model.isDefault) {
+                if (!model.isDefault) {
                     IconButton(
                         onClick = onSetDefaultClick,
                         modifier = Modifier
@@ -261,11 +498,16 @@ fun GgufModelCard(
                             .clip(CircleShape)
                             .background(SlateSurfaceVariant)
                     ) {
-                        Icon(Icons.Default.Star, contentDescription = "Set Default", tint = AmberWarning, modifier = Modifier.size(18.dp))
+                        Icon(
+                            Icons.Default.Star,
+                            contentDescription = "Set Default",
+                            tint = AmberWarning,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
 
-                if (model.isDownloaded && !model.isLoaded) {
+                if (!model.isLoaded) {
                     IconButton(
                         onClick = onDeleteClick,
                         modifier = Modifier
@@ -273,7 +515,12 @@ fun GgufModelCard(
                             .clip(CircleShape)
                             .background(SlateSurfaceVariant)
                     ) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = TextMuted, modifier = Modifier.size(18.dp))
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Remove from View",
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }

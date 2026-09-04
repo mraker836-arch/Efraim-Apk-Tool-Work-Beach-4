@@ -25,6 +25,79 @@ import java.util.zip.ZipOutputStream
 class ApkScannerService(private val context: Context) {
 
     private val axmlParser = AxmlParser()
+    val pipeline = ApkScanPipeline(com.example.database.AppDatabase.getDatabase(context).apkScanDao())
+
+    fun toApkInfo(scanResult: com.example.apk.model.ApkScanResult, file: File): APKInfo {
+        val nativeLibsMap = mutableMapOf<String, MutableList<String>>()
+        for (lib in scanResult.nativeLibrariesList) {
+            nativeLibsMap.getOrPut(lib.abi) { mutableListOf() }.add(lib.libraryName)
+        }
+
+        val legacyCerts = scanResult.certificatesList
+            .filter { it.status != com.example.apk.model.CertificateStatus.SIGNATURE_FILES_PRESENT && it.status != com.example.apk.model.CertificateStatus.SIGNATURE_UNAVAILABLE }
+            .map { CertInspector.toLegacyCertificateInfo(it) }
+
+        val signingStatus = when {
+            scanResult.certificatesList.any { it.status == com.example.apk.model.CertificateStatus.CERTIFICATE_VERIFIED } -> SigningStatus.SIGNED_V1
+            scanResult.certificatesList.any { it.status == com.example.apk.model.CertificateStatus.CERTIFICATE_READ } -> SigningStatus.SIGNED_V1
+            scanResult.fileInfo.signingRelatedFiles.isNotEmpty() -> SigningStatus.SIGNED_V1
+            else -> SigningStatus.UNSIGNED
+        }
+
+        val dexFiles = scanResult.dexList.map { dex ->
+            DexFileInfo(
+                name = dex.fileName,
+                sizeBytes = dex.fileSize,
+                classDefsCount = dex.classDefsCount,
+                methodIdsEstimate = dex.methodIdsEstimate,
+                dexVersion = dex.version,
+                stringIdsCount = dex.stringIdsCount,
+                typeIdsCount = dex.typeIdsCount,
+                protoIdsCount = dex.protoIdsCount,
+                fieldIdsCount = dex.fieldIdsCount,
+                classNames = dex.classNames
+            )
+        }
+
+        val permissions = scanResult.permissionsList.map { p ->
+            PermissionInfo(
+                name = p.name,
+                riskLevel = p.riskIndicator,
+                description = p.reason
+            )
+        }
+
+        return APKInfo(
+            id = scanResult.scanId,
+            fileName = scanResult.fileInfo.fileName,
+            filePath = file.absolutePath,
+            fileSize = scanResult.fileInfo.fileSize,
+            sha256 = scanResult.fileInfo.sha256,
+            md5 = scanResult.fileInfo.md5,
+            packageName = scanResult.manifestInfo.packageName,
+            appName = scanResult.manifestInfo.appName,
+            versionName = scanResult.manifestInfo.versionName,
+            versionCode = scanResult.manifestInfo.versionCode,
+            minSdk = scanResult.manifestInfo.minSdk,
+            targetSdk = scanResult.manifestInfo.targetSdk,
+            compileSdk = scanResult.manifestInfo.compileSdk,
+            isDebuggable = scanResult.manifestInfo.isDebuggable,
+            allowsBackup = scanResult.manifestInfo.allowBackup,
+            supportsRtl = true,
+            permissions = permissions,
+            activities = scanResult.manifestInfo.activities,
+            services = scanResult.manifestInfo.services,
+            receivers = scanResult.manifestInfo.receivers,
+            providers = scanResult.manifestInfo.providers,
+            dexFiles = dexFiles,
+            nativeLibraries = nativeLibsMap,
+            assets = emptyList(),
+            resources = emptyList(),
+            certificates = legacyCerts,
+            signingStatus = signingStatus,
+            totalEntriesCount = scanResult.fileInfo.totalZipEntries
+        )
+    }
 
     suspend fun scanApk(apkFile: File): APKInfo = withContext(Dispatchers.IO) {
         SecurityManager.validateApkFileSize(apkFile)

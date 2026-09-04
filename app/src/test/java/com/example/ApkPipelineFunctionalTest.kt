@@ -200,16 +200,38 @@ class ApkPipelineFunctionalTest {
     @Test
     fun testAiInference_Modes_And_Telemetry() {
         runBlocking {
-            // 16. GGUF MODEL INTEGRATION
-            val models = modelManager.models.value
-            assertTrue("Model catalog must contain pre-configured GGUF models", models.isNotEmpty())
-            val defaultModel = models.first { it.isDefault }
-            assertEquals("Q4_K_M", defaultModel.quantization)
+            // 16. REAL PRIVATE BRAIN MODEL MANAGER DISCOVERY
+            val testProvider = object : com.example.ai.inference.PrivateBrainProvider {
+                override suspend fun isAvailable(): Boolean = true
+                override suspend fun listModels(): List<String> = listOf("qwen2.5-coder:1.5b", "llama3.2:3b")
+                override suspend fun generate(
+                    messages: List<com.example.ai.inference.ChatMessage>,
+                    model: String,
+                    temperature: Float,
+                    maxTokens: Int
+                ): String = "Real model output"
+                override fun generateStream(
+                    messages: List<com.example.ai.inference.ChatMessage>,
+                    model: String,
+                    temperature: Float,
+                    maxTokens: Int
+                ): kotlinx.coroutines.flow.Flow<String> = kotlinx.coroutines.flow.flow {
+                    emit("Analysis chunk")
+                }
+            }
+            inferenceService.setProvider(testProvider)
 
-            val loadTime = inferenceService.loadLocalGgufModel(defaultModel.fileName)
-            assertTrue("Load time must be >= 0", loadTime >= 0)
+            // Test ModelManager server discovery
+            val discovered = modelManager.refreshModels()
+            assertTrue("ModelManager must discover models from real provider", discovered.isNotEmpty())
+            assertEquals("qwen2.5-coder:1.5b", discovered.first().fileName)
+            assertEquals(com.example.ai.models.ServerConnectionState.AVAILABLE, modelManager.serverState.value)
+            assertTrue("isModelAvailable must return true for server model", modelManager.isModelAvailable("qwen2.5-coder:1.5b"))
+
+            // Connect/load model
+            modelManager.loadModel("qwen2.5-coder:1.5b")
             assertTrue("Inference service must report local model loaded", inferenceService.isLocalModelLoaded())
-            assertEquals(defaultModel.fileName, inferenceService.getLoadedModelName())
+            assertEquals("qwen2.5-coder:1.5b", inferenceService.getLoadedModelName())
 
             // 17. CLOUD & OFFLINE GENERATION & METRICS
             inferenceService.setMode(AiMode.OFFLINE)

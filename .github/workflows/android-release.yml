@@ -233,10 +233,13 @@ jobs:
             cp build/app/outputs/bundle/release/*.aab output_artifacts/efraim-apk-workbench-release.aab || true
           else
             echo "Building Android Native APK with Gradle..."
-            ./gradlew :app:assembleRelease --stacktrace || ./gradlew :app:assembleDebug --stacktrace
+            ./gradlew :app:assembleRelease --stacktrace
             
-            # Locate generated APK
-            APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+            # Locate generated release APK
+            APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)
+            if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+              APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+            fi
             if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
               echo "::error::CRITICAL: Android APK output not found after build."
               exit 1

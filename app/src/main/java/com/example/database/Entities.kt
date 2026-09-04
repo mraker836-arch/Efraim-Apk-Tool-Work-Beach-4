@@ -54,3 +54,20 @@ data class BuildHistoryEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val logSummary: String
 )
+
+@Entity(tableName = "apk_scans")
+data class ApkScanEntity(
+    @PrimaryKey val scanId: String,
+    val fileName: String,
+    val fileSize: Long,
+    val sha256: String,
+    val md5: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val status: String,
+    val manifestSummary: String,
+    val dexCount: Int,
+    val abiSummary: String,
+    val certificateSummary: String,
+    val securityFindingCount: Int,
+    val errorMessage: String? = null
+)

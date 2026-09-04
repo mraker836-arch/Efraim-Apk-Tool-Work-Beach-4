@@ -1,9 +1,9 @@
 package com.example.ai.inference
 
 import android.content.Context
+import android.util.Log
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -41,18 +41,97 @@ data class InferenceConfig(
     val systemPrompt: String = "You are DIANA, a senior Android APK security, architecture, and rebuild specialist."
 )
 
+/**
+ * Real Private Brain Inference Service.
+ * Coordinates between DIANA and self-hosted private LLM backends (OpenAI-compatible or Ollama).
+ * Contains no canned responses, mock delays, or simulated weights.
+ */
 class InferenceService(private val context: Context) {
+
+    private val prefs = context.getSharedPreferences("efraim_private_brain_prefs", Context.MODE_PRIVATE)
 
     private var currentMode: AiMode = AiMode.AUTO
     private var loadedLocalModel: String? = null
     private var modelLoadTimeMs: Long = 0L
     private var isModelLoaded: Boolean = false
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
+    private var activeConfig: PrivateBrainConfig = loadPersistedConfig()
+    private var customProvider: PrivateBrainProvider? = null
+
+    private val cloudHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun loadPersistedConfig(): PrivateBrainConfig {
+        val baseUrl = prefs.getString("base_url", "") ?: ""
+        val apiKey = prefs.getString("api_key", null)
+        val selectedModel = prefs.getString("selected_model", "") ?: ""
+        val typeStr = prefs.getString("server_type", PrivateBrainServerType.AUTO.name) ?: PrivateBrainServerType.AUTO.name
+        val serverType = try {
+            PrivateBrainServerType.valueOf(typeStr)
+        } catch (e: Exception) {
+            PrivateBrainServerType.AUTO
+        }
+        val enableCloudFallback = prefs.getBoolean("enable_cloud_fallback", false)
+
+        return PrivateBrainConfig(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            selectedModel = selectedModel,
+            serverType = serverType,
+            enableCloudFallback = enableCloudFallback
+        )
+    }
+
+    fun getPrivateBrainConfig(): PrivateBrainConfig = activeConfig
+
+    fun updatePrivateBrainConfig(newConfig: PrivateBrainConfig) {
+        activeConfig = newConfig
+        prefs.edit().apply {
+            putString("base_url", newConfig.baseUrl)
+            putString("api_key", newConfig.apiKey)
+            putString("selected_model", newConfig.selectedModel)
+            putString("server_type", newConfig.serverType.name)
+            putBoolean("enable_cloud_fallback", newConfig.enableCloudFallback)
+            apply()
+        }
+        customProvider = null // Reset custom provider so new config takes effect
+        safeLog("Updated Private Brain configuration for endpoint: ${sanitizeUrl(newConfig.baseUrl)}")
+    }
+
+    fun setProvider(provider: PrivateBrainProvider) {
+        customProvider = provider
+    }
+
+    fun getActiveProvider(): PrivateBrainProvider {
+        customProvider?.let { return it }
+
+        val type = when (activeConfig.serverType) {
+            PrivateBrainServerType.OLLAMA -> PrivateBrainServerType.OLLAMA
+            PrivateBrainServerType.OPENAI_COMPATIBLE -> PrivateBrainServerType.OPENAI_COMPATIBLE
+            PrivateBrainServerType.AUTO -> {
+                val url = activeConfig.baseUrl.lowercase()
+                if (url.contains(":11434") || url.contains("/api/")) {
+                    PrivateBrainServerType.OLLAMA
+                } else {
+                    PrivateBrainServerType.OPENAI_COMPATIBLE
+                }
+            }
+        }
+
+        return when (type) {
+            PrivateBrainServerType.OLLAMA -> OllamaPrivateBrainProvider(activeConfig)
+            else -> OpenAiPrivateBrainProvider(activeConfig)
+        }
+    }
+
+    fun isConfigured(): Boolean {
+        return activeConfig.baseUrl.isNotBlank() || customProvider != null
+    }
 
     fun setMode(mode: AiMode) {
         currentMode = mode
@@ -64,14 +143,60 @@ class InferenceService(private val context: Context) {
 
     fun getLoadedModelName(): String? = loadedLocalModel
 
-    suspend fun loadLocalGgufModel(modelName: String, contextSize: Int = 4096): Long = withContext(Dispatchers.Default) {
-        val start = System.currentTimeMillis()
-        // Simulate local quantized weight mapping and context buffer allocation
-        delay(400)
-        loadedLocalModel = modelName
-        isModelLoaded = true
-        modelLoadTimeMs = System.currentTimeMillis() - start
-        modelLoadTimeMs
+    /**
+     * Verifies server availability and confirms the model actually exists before setting isModelLoaded = true.
+     * Replaces the former simulated model loader.
+     */
+    suspend fun loadModel(modelName: String, contextSize: Int = 4096): Long = withContext(Dispatchers.IO) {
+        val startTime = System.currentTimeMillis()
+
+        if (!isConfigured()) {
+            isModelLoaded = false
+            loadedLocalModel = null
+            throw PrivateBrainNotConfiguredException("Private Brain is not configured.")
+        }
+
+        val provider = getActiveProvider()
+        if (!provider.isAvailable()) {
+            isModelLoaded = false
+            loadedLocalModel = null
+            throw PrivateBrainUnavailableException("Private Brain server at ${sanitizeUrl(activeConfig.baseUrl)} is unavailable or offline.")
+        }
+
+        try {
+            val availableModels = provider.listModels()
+            val match = availableModels.firstOrNull {
+                it.equals(modelName, ignoreCase = true) ||
+                it.contains(modelName, ignoreCase = true) ||
+                modelName.contains(it, ignoreCase = true)
+            }
+
+            if (availableModels.isNotEmpty() && match == null) {
+                isModelLoaded = false
+                loadedLocalModel = null
+                throw PrivateBrainModelNotFoundException(
+                    "Model '$modelName' was not found on the Private Brain server. Available models: ${availableModels.joinToString(", ")}"
+                )
+            }
+
+            loadedLocalModel = match ?: modelName
+            isModelLoaded = true
+            modelLoadTimeMs = System.currentTimeMillis() - startTime
+            safeLog("Successfully connected model: $loadedLocalModel in ${modelLoadTimeMs}ms")
+            modelLoadTimeMs
+        } catch (e: Exception) {
+            isModelLoaded = false
+            loadedLocalModel = null
+            if (e is PrivateBrainException) throw e
+            throw PrivateBrainUnavailableException("Failed to confirm model availability on Private Brain: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Backward-compatible alias for loading a model into the Private Brain session.
+     */
+    suspend fun loadLocalGgufModel(modelName: String, contextSize: Int = 4096): Long {
+        return loadModel(modelName, contextSize)
     }
 
     suspend fun unloadLocalModel() = withContext(Dispatchers.Default) {
@@ -81,32 +206,65 @@ class InferenceService(private val context: Context) {
     }
 
     /**
-     * Stream inferences either through local on-device GGUF engine or Gemini Cloud API.
+     * Queries the active private server for real available models.
+     */
+    suspend fun listAvailableModels(): List<String> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) {
+            throw PrivateBrainNotConfiguredException("Private Brain is not configured.")
+        }
+        getActiveProvider().listModels()
+    }
+
+    /**
+     * Non-streaming completion call to the Private Brain.
+     */
+    suspend fun generate(
+        messages: List<ChatMessage>,
+        model: String? = null,
+        config: InferenceConfig = InferenceConfig()
+    ): String = withContext(Dispatchers.IO) {
+        if (!isConfigured()) {
+            throw PrivateBrainNotConfiguredException("Private Brain is not configured.")
+        }
+
+        val targetModel = model
+            ?: loadedLocalModel
+            ?: activeConfig.selectedModel.ifEmpty { "default" }
+
+        val provider = getActiveProvider()
+        provider.generate(messages, targetModel, config.temperature, config.maxTokens)
+    }
+
+    /**
+     * Stream inferences from the configured Private Brain LLM backend without artificial delay.
+     * If cloud mode is requested and cloud fallback is explicitly enabled in settings,
+     * routes to Gemini API; otherwise strictly operates via Private Brain.
      */
     fun generateStream(
         prompt: String,
         config: InferenceConfig = InferenceConfig(),
         onMetricsUpdated: ((InferenceMetrics) -> Unit)? = null
     ): Flow<String> = flow {
-        val effectiveMode = when (currentMode) {
-            AiMode.OFFLINE -> AiMode.OFFLINE
-            AiMode.CLOUD -> AiMode.CLOUD
-            AiMode.AUTO -> if (isModelLoaded) AiMode.OFFLINE else AiMode.CLOUD
-        }
-
         val startTime = System.currentTimeMillis()
         var tokenCount = 0
 
-        if (effectiveMode == AiMode.OFFLINE) {
-            // Local GGUF Inference Engine (On-device)
-            val modelName = loadedLocalModel ?: "TinyLlama-1.1B-Chat-Q4_K_M.gguf"
-            val responses = generateLocalGgufResponse(prompt, modelName)
-            val words = responses.split(" ")
+        // Strict Cloud Mode check: Only runs if user selected CLOUD mode AND explicitly enabled cloud fallback
+        if (currentMode == AiMode.CLOUD) {
+            if (!activeConfig.enableCloudFallback) {
+                emit("[Notice: Cloud AI mode is disabled in Private Brain settings. Enable cloud fallback in Settings to permit external cloud transmission.]")
+                return@flow
+            }
 
-            for (i in words.indices) {
-                val chunk = if (i == 0) words[i] else " " + words[i]
-                emit(chunk)
-                tokenCount++
+            val apiKey = BuildConfig.GEMINI_API_KEY
+            if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+                emit("[Notice: Gemini Cloud API Key not configured in Secrets. Please provide a valid Gemini API Key to enable cloud reasoning.]")
+                return@flow
+            }
+
+            try {
+                val cloudText = callGeminiRestApi(prompt, apiKey, config)
+                emit(cloudText)
+                tokenCount = (cloudText.length / 4).coerceAtLeast(1)
 
                 val elapsedSec = (System.currentTimeMillis() - startTime).coerceAtLeast(1) / 1000f
                 val tps = tokenCount / elapsedSec
@@ -115,9 +273,9 @@ class InferenceService(private val context: Context) {
 
                 onMetricsUpdated?.invoke(
                     InferenceMetrics(
-                        modelName = modelName,
-                        isLocal = true,
-                        loadTimeMs = modelLoadTimeMs,
+                        modelName = "gemini-2.5-flash",
+                        isLocal = false,
+                        loadTimeMs = 0L,
                         inferenceTimeMs = System.currentTimeMillis() - startTime,
                         tokensGenerated = tokenCount,
                         tokensPerSecond = tps,
@@ -126,26 +284,34 @@ class InferenceService(private val context: Context) {
                         maxContextTokens = config.contextSize
                     )
                 )
-
-                // Realistic on-device token latency (~25-45 tokens/sec)
-                delay(30)
+            } catch (e: Exception) {
+                emit("[Cloud AI Error: ${e.message}]")
             }
-        } else {
-            // Cloud AI Mode via Gemini REST API
-            val apiKey = BuildConfig.GEMINI_API_KEY
-            if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-                emit("[Notice: Gemini Cloud API Key not configured in Secrets/Settings. Please provide a valid Gemini API Key to enable live cloud AI reasoning.]\n\n")
-                val localText = generateContextualAnalysis(prompt)
-                for (chunk in localText.chunked(12)) {
-                    emit(chunk)
-                    tokenCount += 3
-                    delay(25)
-                }
-            } else {
-                val cloudText = callGeminiRestApi(prompt, apiKey, config)
-                for (word in cloudText.split(" ")) {
-                    emit("$word ")
+            return@flow
+        }
+
+        // Default & Primary Execution Path: Private Brain
+        if (!isConfigured()) {
+            emit("Private Brain is not configured.")
+            return@flow
+        }
+
+        val targetModel = loadedLocalModel
+            ?: activeConfig.selectedModel.ifEmpty { "default" }
+
+        val provider = getActiveProvider()
+
+        val messages = listOf(
+            ChatMessage(sender = "system", text = config.systemPrompt),
+            ChatMessage(sender = "user", text = prompt)
+        )
+
+        try {
+            provider.generateStream(messages, targetModel, config.temperature, config.maxTokens)
+                .collect { tokenChunk ->
+                    emit(tokenChunk)
                     tokenCount++
+
                     val elapsedSec = (System.currentTimeMillis() - startTime).coerceAtLeast(1) / 1000f
                     val tps = tokenCount / elapsedSec
                     val runtime = Runtime.getRuntime()
@@ -153,9 +319,9 @@ class InferenceService(private val context: Context) {
 
                     onMetricsUpdated?.invoke(
                         InferenceMetrics(
-                            modelName = "gemini-2.5-flash",
-                            isLocal = false,
-                            loadTimeMs = 0L,
+                            modelName = targetModel,
+                            isLocal = true,
+                            loadTimeMs = modelLoadTimeMs,
                             inferenceTimeMs = System.currentTimeMillis() - startTime,
                             tokensGenerated = tokenCount,
                             tokensPerSecond = tps,
@@ -164,49 +330,12 @@ class InferenceService(private val context: Context) {
                             maxContextTokens = config.contextSize
                         )
                     )
-                    delay(15)
                 }
-            }
+        } catch (e: Exception) {
+            safeLog("Private Brain stream failed: ${e.javaClass.simpleName} - ${e.message}")
+            emit("[Error: ${e.message ?: "Private Brain communication failure"}]")
         }
     }.flowOn(Dispatchers.IO)
-
-    private fun generateContextualAnalysis(prompt: String): String {
-        val lower = prompt.lowercase()
-        return when {
-            lower.contains("permission") || lower.contains("danger") -> {
-                "### DIANA Permission Security Audit\n" +
-                "- **Privilege Boundary**: Evaluated against standard Android sandbox boundaries.\n" +
-                "- **Critical vectors**: Ensure any SMS, Location, or Storage access is strictly mediated through Android PhotoPicker or Storage Access Framework.\n" +
-                "- **Rebuild Recommendation**: You can safely strip non-essential runtime permissions in the Rebuild Workspace without modifying Dalvik bytecode."
-            }
-            lower.contains("rebuild") || lower.contains("plan") -> {
-                "### DIANA Rebuild Strategy & Execution Plan\n" +
-                "1. **Manifest Rewriting**: Update application label and bump `versionName` to ensure clean incremental deployment.\n" +
-                "2. **Resource Integrity**: Ensure replacement drawables and XML layouts maintain correct resource ID mappings.\n" +
-                "3. **Alignment & Signing**: The native rebuild engine applies 4-byte boundary padding (ZipAlign) followed by JAR v1 signature block creation."
-            }
-            lower.contains("manifest") || lower.contains("debug") -> {
-                "### DIANA Manifest Analysis\n" +
-                "- **Debuggable State**: Production APKs must have `android:debuggable=\"false\"` to prevent JDWP memory extraction.\n" +
-                "- **Component Exporting**: Ensure all exported Activities/Receivers declare explicit intent filters or permission guards."
-            }
-            lower.contains("cert") || lower.contains("sign") -> {
-                "### DIANA PKI & Signature Assessment\n" +
-                "- **Algorithm**: RSA-2048 with SHA-256 digest is supported natively across all Android versions (API 1 to 36).\n" +
-                "- **Digest Verification**: Every APK entry digest is verified against `META-INF/MANIFEST.MF` to guarantee integrity."
-            }
-            else -> {
-                "### DIANA APK Triage Report\n" +
-                "- **Context**: Static analysis details processed.\n" +
-                "- **Architecture**: Package structure and DEX binaries are analyzed.\n" +
-                "- **Recommended Next Steps**: Review the APK Lab tabs (Manifest, Permissions, DEX, Assets, Signing) for detailed technical breakdowns."
-            }
-        }
-    }
-
-    private fun generateLocalGgufResponse(prompt: String, modelName: String): String {
-        return generateContextualAnalysis(prompt)
-    }
 
     private suspend fun callGeminiRestApi(prompt: String, apiKey: String, config: InferenceConfig): String = withContext(Dispatchers.IO) {
         val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
@@ -232,27 +361,36 @@ class InferenceService(private val context: Context) {
             .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        try {
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val err = response.body?.string() ?: ""
-                    return@withContext "Cloud AI API returned code ${response.code}: $err"
-                }
-                val bodyStr = response.body?.string() ?: ""
-                val root = JSONObject(bodyStr)
-                val candidates = root.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    val candidate = candidates.getJSONObject(0)
-                    val content = candidate.optJSONObject("content")
-                    val parts = content?.optJSONArray("parts")
-                    if (parts != null && parts.length() > 0) {
-                        return@withContext parts.getJSONObject(0).optString("text", "No response text")
-                    }
-                }
-                "No candidate response received from Cloud AI."
+        cloudHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val err = response.body?.string().orEmpty()
+                throw PrivateBrainException("Cloud AI API returned HTTP ${response.code}: $err")
             }
-        } catch (e: Exception) {
-            "Cloud AI connection failed (${e.message}). Falling back to local on-device heuristics."
+            val bodyStr = response.body?.string().orEmpty()
+            val root = JSONObject(bodyStr)
+            val candidates = root.optJSONArray("candidates")
+            if (candidates != null && candidates.length() > 0) {
+                val candidate = candidates.getJSONObject(0)
+                val content = candidate.optJSONObject("content")
+                val parts = content?.optJSONArray("parts")
+                if (parts != null && parts.length() > 0) {
+                    return@withContext parts.getJSONObject(0).optString("text", "")
+                }
+            }
+            throw PrivateBrainResponseException("No candidate text received from Cloud AI.")
         }
+    }
+
+    private fun sanitizeUrl(url: String): String {
+        return try {
+            val uri = java.net.URI(url)
+            "${uri.scheme}://${uri.host}:${if (uri.port != -1) uri.port else ""}${uri.path}"
+        } catch (e: Exception) {
+            "[Configured Private Endpoint]"
+        }
+    }
+
+    private fun safeLog(msg: String) {
+        Log.d("InferenceService", msg)
     }
 }

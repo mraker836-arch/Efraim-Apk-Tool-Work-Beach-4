@@ -1,29 +1,68 @@
 package com.example.apk.scanner
 
 import com.example.apk.model.DexFileInfo
+import com.example.apk.model.DexInfo
+import com.example.core.CryptoUtils
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 object DexParser {
 
-    fun parseDexHeader(name: String, bytes: ByteArray): DexFileInfo {
+    fun parseDex(name: String, bytes: ByteArray): DexInfo {
+        val sha256 = CryptoUtils.calculateSha256(bytes)
+        val fileSize = bytes.size.toLong()
+
         if (bytes.size < 112) {
-            return DexFileInfo(name, bytes.size.toLong(), 0, 0, "unknown")
+            return DexInfo(
+                fileName = name,
+                fileSize = fileSize,
+                sha256 = sha256,
+                magic = "Unavailable",
+                version = "Unavailable",
+                adler32Checksum = "Unavailable",
+                sha1Signature = "Unavailable",
+                classDefsCount = 0,
+                methodIdsEstimate = 0,
+                stringIdsCount = 0,
+                typeIdsCount = 0,
+                protoIdsCount = 0,
+                fieldIdsCount = 0,
+                classNames = emptyList(),
+                semanticAnalysisStatus = "Advanced DEX semantic parsing unavailable"
+            )
         }
 
         val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
 
-        val magic = ByteArray(8)
-        buffer.get(magic)
-        val magicStr = String(magic, Charsets.US_ASCII)
-        val version = if (magicStr.startsWith("dex\n")) {
+        val magicBytes = ByteArray(8)
+        buffer.get(magicBytes)
+        val magicStr = String(magicBytes, Charsets.US_ASCII)
+
+        val isDexMagic = magicStr.startsWith("dex\n")
+        val version = if (isDexMagic && magicStr.length >= 7) {
             magicStr.substring(4, 7).trim()
         } else {
-            "035"
+            "Unavailable"
         }
 
-        // Skip checksum(4) + signature(20) + file_size(4) + header_size(4) + endian_tag(4) + link_size(4) + link_off(4) + map_off(4)
-        buffer.position(8 + 4 + 20 + 4 + 4 + 4 + 4 + 4 + 4)
+        val magicDisplay = if (isDexMagic) "dex\\n$version\\0" else "Unknown magic (${CryptoUtils.bytesToHex(magicBytes.take(4).toByteArray())})"
+
+        // Checksum (4 bytes little endian uint32)
+        val checksumInt = buffer.int
+        val adler32Hex = "0x" + Integer.toHexString(checksumInt).uppercase().padStart(8, '0')
+
+        // SHA-1 signature (20 bytes)
+        val sigBytes = ByteArray(20)
+        buffer.get(sigBytes)
+        val sha1SigHex = CryptoUtils.bytesToHex(sigBytes)
+
+        // file_size(4) + header_size(4) + endian_tag(4) + link_size(4) + link_off(4) + map_off(4)
+        val declaredFileSize = buffer.int
+        val headerSize = buffer.int
+        val endianTag = buffer.int
+        val linkSize = buffer.int
+        val linkOff = buffer.int
+        val mapOff = buffer.int
 
         val stringIdsSize = buffer.int.coerceAtLeast(0)
         val stringIdsOff = buffer.int
@@ -41,7 +80,6 @@ object DexParser {
         val classNames = mutableListOf<String>()
 
         try {
-            // Helper to read string by string_id index
             fun readString(stringIdx: Int): String? {
                 if (stringIdx < 0 || stringIdx >= stringIdsSize) return null
                 val strOffPos = stringIdsOff + (stringIdx * 4)
@@ -61,16 +99,13 @@ object DexParser {
                     shift += 7
                 }
 
-                // Read null-terminated MUTF-8 string
                 val strBytesStart = p
                 while (p < bytes.size && bytes[p] != 0.toByte()) {
                     p++
                 }
-                val rawStr = String(bytes, strBytesStart, (p - strBytesStart).coerceAtLeast(0), Charsets.UTF_8)
-                return rawStr
+                return String(bytes, strBytesStart, (p - strBytesStart).coerceAtLeast(0), Charsets.UTF_8)
             }
 
-            // Helper to get type descriptor by type_id index
             fun getTypeName(typeIdx: Int): String? {
                 if (typeIdx < 0 || typeIdx >= typeIdsSize) return null
                 val typeOffPos = typeIdsOff + (typeIdx * 4)
@@ -80,8 +115,8 @@ object DexParser {
                 return readString(descriptorIdx)
             }
 
-            // Parse class_defs
-            val maxClassesToExtract = minOf(classDefsSize, 100)
+            // Parse class_defs up to 50 real classes
+            val maxClassesToExtract = minOf(classDefsSize, 50)
             for (i in 0 until maxClassesToExtract) {
                 val classDefPos = classDefsOff + (i * 32)
                 if (classDefPos + 32 > bytes.size || classDefPos < 0) break
@@ -89,7 +124,6 @@ object DexParser {
                 val classIdx = buffer.int
                 val rawDescriptor = getTypeName(classIdx)
                 if (!rawDescriptor.isNullOrBlank()) {
-                    // Convert Lcom/example/MyClass; -> com.example.MyClass
                     val formatted = if (rawDescriptor.startsWith("L") && rawDescriptor.endsWith(";")) {
                         rawDescriptor.substring(1, rawDescriptor.length - 1).replace('/', '.')
                     } else {
@@ -99,20 +133,44 @@ object DexParser {
                 }
             }
         } catch (_: Exception) {
-            // Safe fallback if corrupted DEX
+            // Graceful fallback for corrupted DEX tables
         }
 
-        return DexFileInfo(
-            name = name,
-            sizeBytes = bytes.size.toLong(),
+        return DexInfo(
+            fileName = name,
+            fileSize = fileSize,
+            sha256 = sha256,
+            magic = magicDisplay,
+            version = version,
+            adler32Checksum = adler32Hex,
+            sha1Signature = sha1SigHex,
             classDefsCount = classDefsSize,
             methodIdsEstimate = methodIdsSize,
-            dexVersion = version,
             stringIdsCount = stringIdsSize,
             typeIdsCount = typeIdsSize,
             protoIdsCount = protoIdsSize,
             fieldIdsCount = fieldIdsSize,
-            classNames = classNames
+            classNames = classNames,
+            semanticAnalysisStatus = "Advanced DEX semantic parsing unavailable"
+        )
+    }
+
+    /**
+     * Backward-compatibility helper for legacy DexFileInfo callers.
+     */
+    fun parseDexHeader(name: String, bytes: ByteArray): DexFileInfo {
+        val dex = parseDex(name, bytes)
+        return DexFileInfo(
+            name = dex.fileName,
+            sizeBytes = dex.fileSize,
+            classDefsCount = dex.classDefsCount,
+            methodIdsEstimate = dex.methodIdsEstimate,
+            dexVersion = dex.version,
+            stringIdsCount = dex.stringIdsCount,
+            typeIdsCount = dex.typeIdsCount,
+            protoIdsCount = dex.protoIdsCount,
+            fieldIdsCount = dex.fieldIdsCount,
+            classNames = dex.classNames
         )
     }
 }

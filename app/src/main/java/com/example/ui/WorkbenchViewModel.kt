@@ -13,6 +13,7 @@ import com.example.ai.inference.InferenceMetrics
 import com.example.ai.inference.InferenceService
 import com.example.ai.models.GgufModelInfo
 import com.example.ai.models.ModelManager
+import com.example.ai.models.ServerConnectionState
 import com.example.apk.builder.ApkBuildManager
 import com.example.apk.builder.ProjectBuildConfig
 import com.example.apk.model.APKInfo
@@ -94,21 +95,17 @@ enum class AppTab(val title: String, val iconName: String) {
 }
 
 enum class ApkLabSubTab {
+    UPLOAD,
     OVERVIEW,
     INSPECT,
+    SECURITY_FINDINGS,
     DIANA_ANALYSIS,
     REBUILD,
     SIGN_VERIFY,
     EXPORT
 }
 
-data class ChatMessage(
-    val id: String = UUID.randomUUID().toString(),
-    val sender: String, // "user", "diana"
-    val text: String,
-    val timestamp: Long = System.currentTimeMillis(),
-    val metrics: InferenceMetrics? = null
-)
+typealias ChatMessage = com.example.ai.inference.ChatMessage
 
 class WorkbenchViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -180,6 +177,23 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     private val _scanError = MutableStateFlow<String?>(null)
     val scanError: StateFlow<String?> = _scanError.asStateFlow()
 
+    // Real APK Scan Pipeline State
+    val apkScanPipeline = scannerService.pipeline
+    val scanPipelineStatus = apkScanPipeline.scanStatus
+    val scanPipelineMessage = apkScanPipeline.statusMessage
+    val currentScanResult = apkScanPipeline.currentResult
+
+    private val _stagedUri = MutableStateFlow<Uri?>(null)
+    val stagedUri: StateFlow<Uri?> = _stagedUri.asStateFlow()
+
+    private val _stagedFileName = MutableStateFlow<String?>(null)
+    val stagedFileName: StateFlow<String?> = _stagedFileName.asStateFlow()
+
+    private val _stagedFileSize = MutableStateFlow<Long?>(null)
+    val stagedFileSize: StateFlow<Long?> = _stagedFileSize.asStateFlow()
+
+    private var activeScanJob: kotlinx.coroutines.Job? = null
+
     // Diana Analysis Report
     private val _dianaReport = MutableStateFlow<DianaAnalysisReport?>(null)
     val dianaReport: StateFlow<DianaAnalysisReport?> = _dianaReport.asStateFlow()
@@ -227,8 +241,10 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     private val _projectBuildResult = MutableStateFlow<BuildResult?>(null)
     val projectBuildResult: StateFlow<BuildResult?> = _projectBuildResult.asStateFlow()
 
-    // GGUF Models
+    // Private Brain Models & Server State
     val modelsList: StateFlow<List<GgufModelInfo>> = modelManager.models
+    val modelServerState: StateFlow<ServerConnectionState> = modelManager.serverState
+    val modelStatusMessage: StateFlow<String> = modelManager.statusMessage
 
     // Developer Monitor Metrics
     private val _systemMetrics = MutableStateFlow(SystemMonitor.captureMetrics(context))
@@ -299,25 +315,55 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun stageApkForScan(uri: Uri, fileName: String, fileSize: Long = 0L) {
+        _stagedUri.value = uri
+        _stagedFileName.value = fileName
+        _stagedFileSize.value = fileSize
+        _apkLabSubTab.value = ApkLabSubTab.UPLOAD
+        _selectedTab.value = AppTab.APK_LAB
+    }
+
+    fun startStagedAnalysis() {
+        val uri = _stagedUri.value ?: return
+        val name = _stagedFileName.value ?: "selected.apk"
+        importApkFromUri(uri, name)
+    }
+
+    fun cancelActiveScan() {
+        activeScanJob?.cancel()
+        activeScanJob = null
+        _isScanning.value = false
+        _scanError.value = "Analysis cancelled by user."
+    }
+
     fun loadSampleApk(appName: String = "DemoSampleApp") {
-        viewModelScope.launch {
+        activeScanJob?.cancel()
+        activeScanJob = viewModelScope.launch {
             _isScanning.value = true
             _scanError.value = null
             val start = System.currentTimeMillis()
             try {
                 val apkFile = scannerService.generateSampleApk(appName)
-                val info = scannerService.scanApk(apkFile)
-                _currentApk.value = info
-                runDianaAnalysis(info)
-                saveProjectRecord(info)
-                val dur = System.currentTimeMillis() - start
-                diagnosticsEngine.trackApkOperation(
-                    operationType = "IMPORT",
-                    durationMs = dur,
-                    success = true,
-                    artifactSizeBytes = info.fileSize,
-                    module = "ApkScannerService"
-                )
+                val scanResult = apkScanPipeline.scanFromFile(apkFile)
+                scanResult.onSuccess { result ->
+                    val info = scannerService.toApkInfo(result, apkFile)
+                    _currentApk.value = info
+                    _stagedFileName.value = apkFile.name
+                    _stagedFileSize.value = apkFile.length()
+                    runDianaAnalysis(info)
+                    saveProjectRecord(info)
+                    _apkLabSubTab.value = ApkLabSubTab.OVERVIEW
+                    val dur = System.currentTimeMillis() - start
+                    diagnosticsEngine.trackApkOperation(
+                        operationType = "IMPORT",
+                        durationMs = dur,
+                        success = true,
+                        artifactSizeBytes = info.fileSize,
+                        module = "ApkScanPipeline"
+                    )
+                }.onFailure { e ->
+                    _scanError.value = e.message ?: "Failed to scan sample APK"
+                }
             } catch (e: Exception) {
                 _scanError.value = e.message
                 val dur = System.currentTimeMillis() - start
@@ -325,7 +371,7 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
                     operationType = "IMPORT",
                     durationMs = dur,
                     success = false,
-                    module = "ApkScannerService",
+                    module = "ApkScanPipeline",
                     errorMessage = e.message
                 )
             } finally {
@@ -335,38 +381,45 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun importApkFromUri(uri: Uri, fileName: String) {
-        viewModelScope.launch {
+        activeScanJob?.cancel()
+        activeScanJob = viewModelScope.launch {
             _isScanning.value = true
             _scanError.value = null
+            _stagedUri.value = uri
+            _stagedFileName.value = fileName
+            _selectedTab.value = AppTab.APK_LAB
             val start = System.currentTimeMillis()
             try {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                    ?: throw IllegalArgumentException("Cannot open stream for URI: $uri")
-                val importedFile = scannerService.importApkStream(inputStream, fileName)
-                val info = scannerService.scanApk(importedFile)
-                _currentApk.value = info
-                runDianaAnalysis(info)
-                saveProjectRecord(info)
-                _apkLabSubTab.value = ApkLabSubTab.OVERVIEW
-                _selectedTab.value = AppTab.APK_LAB
-                val dur = System.currentTimeMillis() - start
-                diagnosticsEngine.trackApkOperation(
-                    operationType = "IMPORT",
-                    durationMs = dur,
-                    success = true,
-                    artifactSizeBytes = info.fileSize,
-                    module = "ApkScannerService"
-                )
+                val scanResult = apkScanPipeline.scanFromUri(context, uri, fileName)
+                scanResult.onSuccess { result ->
+                    val apkFile = java.io.File(context.cacheDir, "apk_scans/${result.scanId}.apk")
+                    val info = scannerService.toApkInfo(result, apkFile)
+                    _currentApk.value = info
+                    _stagedFileSize.value = result.fileInfo.fileSize
+                    saveProjectRecord(info)
+                    runDianaAnalysis(info)
+                    _apkLabSubTab.value = ApkLabSubTab.OVERVIEW
+                    val dur = System.currentTimeMillis() - start
+                    diagnosticsEngine.trackApkOperation(
+                        operationType = "IMPORT",
+                        durationMs = dur,
+                        success = true,
+                        artifactSizeBytes = info.fileSize,
+                        module = "ApkScanPipeline"
+                    )
+                }.onFailure { e ->
+                    _scanError.value = e.message ?: "Failed to analyze APK archive"
+                    val dur = System.currentTimeMillis() - start
+                    diagnosticsEngine.trackApkOperation(
+                        operationType = "IMPORT",
+                        durationMs = dur,
+                        success = false,
+                        module = "ApkScanPipeline",
+                        errorMessage = e.message
+                    )
+                }
             } catch (e: Exception) {
-                _scanError.value = e.message
-                val dur = System.currentTimeMillis() - start
-                diagnosticsEngine.trackApkOperation(
-                    operationType = "IMPORT",
-                    durationMs = dur,
-                    success = false,
-                    module = "ApkScannerService",
-                    errorMessage = e.message
-                )
+                _scanError.value = e.message ?: "Unexpected error during APK scanning"
             } finally {
                 _isScanning.value = false
             }
@@ -467,6 +520,10 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun cancelProjectBuild() {
+        buildManager.cancelBuild()
+    }
+
     fun signCurrentApk(keyAlias: String) {
         val apk = _currentApk.value ?: return
         viewModelScope.launch {
@@ -516,20 +573,32 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
             val initialBotMessage = ChatMessage(id = botMsgId, sender = "diana", text = "Thinking...")
             _chatMessages.value = _chatMessages.value + initialBotMessage
 
-            inferenceService.generateStream(
-                prompt = fullPrompt,
-                config = InferenceConfig(),
-                onMetricsUpdated = { m ->
-                    currentMetrics = m
-                    _lastInferenceMetrics.value = m
-                }
-            ).collect { chunk ->
-                if (accumulatedText.isEmpty()) {
-                    accumulatedText = chunk
-                } else {
-                    accumulatedText += chunk
-                }
+            try {
+                inferenceService.generateStream(
+                    prompt = fullPrompt,
+                    config = InferenceConfig(),
+                    onMetricsUpdated = { m ->
+                        currentMetrics = m
+                        _lastInferenceMetrics.value = m
+                    }
+                ).collect { chunk ->
+                    if (accumulatedText.isEmpty()) {
+                        accumulatedText = chunk
+                    } else {
+                        accumulatedText += chunk
+                    }
 
+                    _chatMessages.value = _chatMessages.value.map { msg ->
+                        if (msg.id == botMsgId) {
+                            msg.copy(text = accumulatedText, metrics = currentMetrics)
+                        } else {
+                            msg
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: "Private Brain communication error"
+                accumulatedText = "[Error: $errorMsg]"
                 _chatMessages.value = _chatMessages.value.map { msg ->
                     if (msg.id == botMsgId) {
                         msg.copy(text = accumulatedText, metrics = currentMetrics)
@@ -537,9 +606,9 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
                         msg
                     }
                 }
+            } finally {
+                _isGeneratingAi.value = false
             }
-
-            _isGeneratingAi.value = false
 
             // Save conversation to Room
             database.conversationDao().insertMessage(
@@ -570,6 +639,18 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun getAiMode(): AiMode = inferenceService.getMode()
+
+    fun refreshModels() {
+        viewModelScope.launch {
+            modelManager.refreshModels()
+        }
+    }
+
+    fun testModelServerConnection() {
+        viewModelScope.launch {
+            modelManager.testConnection()
+        }
+    }
 
     fun loadModel(modelId: String) {
         viewModelScope.launch {

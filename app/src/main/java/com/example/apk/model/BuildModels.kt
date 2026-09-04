@@ -6,6 +6,12 @@ enum class BuildStatus {
     SCANNING,
     ANALYZING,
     PREPARING,
+    CONFIGURING,
+    COMPILING,
+    MERGING_RESOURCES,
+    DEXING,
+    PACKAGING,
+    BUILDING,
     REBUILDING,
     ALIGNING,
     SIGNING,
@@ -13,6 +19,23 @@ enum class BuildStatus {
     COMPLETED,
     FAILED,
     CANCELLED
+}
+
+enum class BuildMode {
+    SOURCE_BUILD,
+    APK_REPACK
+}
+
+enum class BuildFailureCategory(val label: String) {
+    TOOLCHAIN_UNAVAILABLE("Toolchain Unavailable"),
+    PROJECT_INVALID("Project Invalid"),
+    GRADLE_WRAPPER_INVALID("Gradle Wrapper Invalid"),
+    COMPILATION_FAILED("Compilation Failed"),
+    RELEASE_SIGNING_NOT_CONFIGURED("Release Signing Not Configured"),
+    ARTIFACT_MISSING("Artifact Missing"),
+    ARTIFACT_INVALID("Artifact Invalid"),
+    CANCELLED("Build Cancelled"),
+    EXECUTION_ERROR("Execution Error")
 }
 
 enum class ChangeType {
@@ -85,7 +108,13 @@ data class BuildResult(
     val durationMs: Long = 0L,
     val errorMessage: String? = null,
     val logs: List<BuildLog> = emptyList(),
-    val signatureVerified: Boolean = false
+    val signatureVerified: Boolean = false,
+    val buildMode: BuildMode = BuildMode.SOURCE_BUILD,
+    val buildType: BuildType = BuildType.DEBUG,
+    val variant: String = "debug",
+    val exitCode: Int = 0,
+    val failureCategory: BuildFailureCategory? = null,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 enum class BuildType {

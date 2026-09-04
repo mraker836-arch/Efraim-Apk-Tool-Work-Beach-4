@@ -52,20 +52,37 @@ interface BuildHistoryDao {
     suspend fun insertBuildHistory(history: BuildHistoryEntity)
 }
 
+@Dao
+interface ApkScanDao {
+    @Query("SELECT * FROM apk_scans ORDER BY timestamp DESC")
+    fun getAllScans(): Flow<List<ApkScanEntity>>
+
+    @Query("SELECT * FROM apk_scans WHERE scanId = :scanId")
+    suspend fun getScanById(scanId: String): ApkScanEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertScan(scan: ApkScanEntity)
+
+    @Query("DELETE FROM apk_scans WHERE scanId = :scanId")
+    suspend fun deleteScan(scanId: String)
+}
+
 @Database(
     entities = [
         ConversationEntity::class,
         ChatMessageEntity::class,
         ApkProjectEntity::class,
-        BuildHistoryEntity::class
+        BuildHistoryEntity::class,
+        ApkScanEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun apkProjectDao(): ApkProjectDao
     abstract fun buildHistoryDao(): BuildHistoryDao
+    abstract fun apkScanDao(): ApkScanDao
 
     companion object {
         @Volatile

@@ -69,21 +69,36 @@ class MainActivity : ComponentActivity() {
                      contract = ActivityResultContracts.OpenDocument()
                  ) { uri: Uri? ->
                      if (uri != null) {
-                         var fileName = "imported_app.apk"
                          try {
-                             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                             val takeFlags: Int = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                             contentResolver.takePersistableUriPermission(uri, takeFlags)
+                         } catch (_: Exception) {
+                             // Some document providers do not support persistable permissions
+                         }
+
+                         var fileName = "selected_app.apk"
+                         var fileSize = 0L
+                         try {
+                             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                                  val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                                 if (nameIndex != -1 && cursor.moveToFirst()) {
-                                     val queriedName = cursor.getString(nameIndex)
-                                     if (!queriedName.isNullOrBlank()) {
-                                         fileName = queriedName
+                                 val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                                 if (cursor.moveToFirst()) {
+                                     if (nameIndex != -1) {
+                                         val queriedName = cursor.getString(nameIndex)
+                                         if (!queriedName.isNullOrBlank()) {
+                                             fileName = queriedName
+                                         }
+                                     }
+                                     if (sizeIndex != -1) {
+                                         fileSize = cursor.getLong(sizeIndex)
                                      }
                                  }
                              }
                          } catch (e: Exception) {
-                             fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "imported_app.apk"
+                             fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "selected_app.apk"
                          }
-                         viewModel.importApkFromUri(uri, fileName)
+                         viewModel.stageApkForScan(uri, fileName, fileSize)
+                         viewModel.startStagedAnalysis()
                      }
                  }
 

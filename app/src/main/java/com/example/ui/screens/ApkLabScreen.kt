@@ -67,11 +67,25 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.LinearProgressIndicator
 import com.example.apk.model.APKInfo
+import com.example.apk.model.ApkScanResult
 import com.example.apk.model.BuildStatus
+import com.example.apk.model.CertificateStatus
 import com.example.apk.model.CustomAssetItem
+import com.example.apk.model.ProtectionCategory
 import com.example.apk.model.RebuildConfig
 import com.example.apk.model.RiskLevel
+import com.example.apk.model.ScanStatus
+import com.example.security.model.SecurityFinding
+import com.example.security.model.SecuritySeverity
 import com.example.ui.ApkLabSubTab
 import com.example.ui.WorkbenchViewModel
 import com.example.ui.theme.AmberWarning
@@ -97,6 +111,7 @@ fun ApkLabScreen(
     val currentApk by viewModel.currentApk.collectAsState()
     val subTab by viewModel.apkLabSubTab.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
+    val currentScanResult by viewModel.currentScanResult.collectAsState()
 
     Column(
         modifier = Modifier
@@ -134,73 +149,106 @@ fun ApkLabScreen(
             }
         }
 
-        if (isScanning) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = CyberCyan)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Processing APK archive...", color = TextSecondary)
+        when (subTab) {
+            ApkLabSubTab.UPLOAD -> {
+                ApkUploadTab(viewModel, onImportApkClick)
+            }
+            ApkLabSubTab.OVERVIEW -> {
+                if (currentApk == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkOverviewTab(apk = currentApk!!, scanResult = currentScanResult, onImportClick = onImportApkClick, onLoadSample = { viewModel.loadSampleApk() }, onNavigateToFindings = { viewModel.selectApkLabSubTab(ApkLabSubTab.SECURITY_FINDINGS) })
                 }
             }
-            return
+            ApkLabSubTab.INSPECT -> {
+                if (currentApk == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkInspectTab(apk = currentApk!!, scanResult = currentScanResult)
+                }
+            }
+            ApkLabSubTab.SECURITY_FINDINGS -> {
+                if (currentApk == null && currentScanResult == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkSecurityFindingsTab(currentScanResult)
+                }
+            }
+            ApkLabSubTab.DIANA_ANALYSIS -> {
+                if (currentApk == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkDianaAnalysisTab(viewModel, currentApk!!)
+                }
+            }
+            ApkLabSubTab.REBUILD -> {
+                if (currentApk == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkRebuildTab(viewModel, currentApk!!)
+                }
+            }
+            ApkLabSubTab.SIGN_VERIFY -> {
+                if (currentApk == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkSignVerifyTab(viewModel, currentApk!!)
+                }
+            }
+            ApkLabSubTab.EXPORT -> {
+                if (currentApk == null) {
+                    ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
+                } else {
+                    ApkExportTab(viewModel, currentApk!!)
+                }
+            }
         }
+    }
+}
 
-        if (currentApk == null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
+@Composable
+fun ApkEmptyWorkspaceCard(
+    onImportApkClick: () -> Unit,
+    onLoadSample: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                Icon(Icons.Default.Build, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("No APK in Workspace", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Import an Android APK file to inspect its manifest, permissions, DEX, native libraries, certificates, and run deterministic security checks.",
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = onImportApkClick,
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = Color(0xFF00363B))
                     ) {
-                        Icon(Icons.Default.Build, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(48.dp))
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("No APK in Workspace", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Import an Android APK file to inspect, audit with DIANA, or run the local rebuild pipeline.",
-                            fontSize = 13.sp,
-                            color = TextSecondary,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                onClick = onImportApkClick,
-                                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = Color(0xFF00363B))
-                            ) {
-                                Text("Import APK", fontWeight = FontWeight.Bold)
-                            }
-                            OutlinedButton(onClick = { viewModel.loadSampleApk() }) {
-                                Text("Load Sample")
-                            }
-                        }
+                        Text("Select APK", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(onClick = onLoadSample) {
+                        Text("Load Sample APK")
                     }
                 }
             }
-            return
-        }
-
-        val apk = currentApk!!
-
-        when (subTab) {
-            ApkLabSubTab.OVERVIEW -> ApkOverviewTab(apk, onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
-            ApkLabSubTab.INSPECT -> ApkInspectTab(apk)
-            ApkLabSubTab.DIANA_ANALYSIS -> ApkDianaAnalysisTab(viewModel, apk)
-            ApkLabSubTab.REBUILD -> ApkRebuildTab(viewModel, apk)
-            ApkLabSubTab.SIGN_VERIFY -> ApkSignVerifyTab(viewModel, apk)
-            ApkLabSubTab.EXPORT -> ApkExportTab(viewModel, apk)
         }
     }
 }
@@ -208,8 +256,10 @@ fun ApkLabScreen(
 @Composable
 fun ApkOverviewTab(
     apk: APKInfo,
+    scanResult: ApkScanResult? = null,
     onImportClick: () -> Unit,
-    onLoadSample: () -> Unit
+    onLoadSample: () -> Unit,
+    onNavigateToFindings: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -260,6 +310,68 @@ fun ApkOverviewTab(
                         InfoTag("Target SDK", "API ${apk.targetSdk}")
                         InfoTag("File Size", formatBytes(apk.fileSize))
                     }
+
+                    if (scanResult != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            InfoTag("Archive Entries", "${scanResult.fileInfo.totalZipEntries}")
+                            InfoTag("Asset Files", "${scanResult.fileInfo.assetCount}")
+                            InfoTag("DEX Files", "${scanResult.dexList.size}")
+                            InfoTag("ABIs", "${scanResult.nativeLibrariesList.map { it.abi }.distinct().size}")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Security Findings Quick Banner (if any findings detected)
+        if (scanResult != null && scanResult.securityFindings.isNotEmpty()) {
+            val criticalCount = scanResult.securityFindings.count { it.severity == SecuritySeverity.CRITICAL }
+            val highCount = scanResult.securityFindings.count { it.severity == SecuritySeverity.HIGH }
+            val bannerColor = if (criticalCount > 0 || highCount > 0) CrimsonError else AmberWarning
+
+            item {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = bannerColor.copy(alpha = 0.12f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, bannerColor.copy(alpha = 0.6f)),
+                    modifier = Modifier.clickable { onNavigateToFindings() }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = bannerColor, modifier = Modifier.size(24.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "${scanResult.securityFindings.size} Security Findings Detected",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = "$criticalCount Critical, $highCount High severity items",
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = onNavigateToFindings,
+                            colors = ButtonDefaults.buttonColors(containerColor = bannerColor, contentColor = Color.White),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("View Audit", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
@@ -274,9 +386,9 @@ fun ApkOverviewTab(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("CRYPTOGRAPHIC CHECKSUMS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextMuted, letterSpacing = 1.sp)
                     Spacer(modifier = Modifier.height(8.dp))
-                    HashRow(label = "SHA-256", hash = apk.sha256)
+                    HashRow(label = "SHA-256", hash = scanResult?.fileInfo?.sha256 ?: apk.sha256)
                     Spacer(modifier = Modifier.height(6.dp))
-                    HashRow(label = "MD5", hash = apk.md5)
+                    HashRow(label = "MD5", hash = scanResult?.fileInfo?.md5 ?: apk.md5)
                 }
             }
         }
@@ -288,16 +400,16 @@ fun ApkOverviewTab(
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TallyCard("Activities", "${apk.activities.size}", modifier = Modifier.weight(1f))
-                    TallyCard("Services", "${apk.services.size}", modifier = Modifier.weight(1f))
-                    TallyCard("Receivers", "${apk.receivers.size}", modifier = Modifier.weight(1f))
-                    TallyCard("Providers", "${apk.providers.size}", modifier = Modifier.weight(1f))
+                    TallyCard("Activities", "${scanResult?.manifestInfo?.activities?.size ?: apk.activities.size}", modifier = Modifier.weight(1f))
+                    TallyCard("Services", "${scanResult?.manifestInfo?.services?.size ?: apk.services.size}", modifier = Modifier.weight(1f))
+                    TallyCard("Receivers", "${scanResult?.manifestInfo?.receivers?.size ?: apk.receivers.size}", modifier = Modifier.weight(1f))
+                    TallyCard("Providers", "${scanResult?.manifestInfo?.providers?.size ?: apk.providers.size}", modifier = Modifier.weight(1f))
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TallyCard("Permissions", "${apk.permissions.size}", modifier = Modifier.weight(1f))
-                    TallyCard("DEX Classes", "${apk.totalDexClasses}", modifier = Modifier.weight(1f))
-                    TallyCard("Native ABIs", "${apk.supportedAbis.size}", modifier = Modifier.weight(1f))
-                    TallyCard("Certificates", "${apk.certificates.size}", modifier = Modifier.weight(1f))
+                    TallyCard("Permissions", "${scanResult?.permissionsList?.size ?: apk.permissions.size}", modifier = Modifier.weight(1f))
+                    TallyCard("DEX Classes", "${scanResult?.dexList?.sumOf { it.classDefsCount } ?: apk.totalDexClasses}", modifier = Modifier.weight(1f))
+                    TallyCard("Native ABIs", "${scanResult?.nativeLibrariesList?.map { it.abi }?.distinct()?.size ?: apk.supportedAbis.size}", modifier = Modifier.weight(1f))
+                    TallyCard("Certificates", "${scanResult?.certificatesList?.size ?: apk.certificates.size}", modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -324,9 +436,9 @@ fun ApkOverviewTab(
 }
 
 @Composable
-fun ApkInspectTab(apk: APKInfo) {
-    var inspectCategory by remember { mutableStateOf("Permissions") }
-    val categories = listOf("Permissions", "Components", "DEX", "Native ABIs", "Assets", "Resources", "Certificates")
+fun ApkInspectTab(apk: APKInfo, scanResult: ApkScanResult? = null) {
+    var inspectCategory by remember { mutableStateOf("Manifest") }
+    val categories = listOf("Manifest", "Permissions", "Components", "DEX", "Native ABIs", "Assets", "Resources", "Certificates")
 
     Column(
         modifier = Modifier
@@ -368,8 +480,17 @@ fun ApkInspectTab(apk: APKInfo) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             when (inspectCategory) {
+                "Manifest" -> {
+                    item {
+                        ManifestInspectSection(manifest = scanResult?.manifestInfo, apk = apk)
+                    }
+                }
                 "Permissions" -> {
-                    if (apk.permissions.isEmpty()) {
+                    if (scanResult != null && scanResult.permissionsList.isNotEmpty()) {
+                        items(scanResult.permissionsList) { perm ->
+                            ScanPermissionItemCard(perm)
+                        }
+                    } else if (apk.permissions.isEmpty()) {
                         item { Text("No permissions declared in manifest.", color = TextMuted, fontSize = 13.sp) }
                     } else {
                         items(apk.permissions) { perm ->
@@ -388,12 +509,69 @@ fun ApkInspectTab(apk: APKInfo) {
                     }
                 }
                 "DEX" -> {
-                    items(apk.dexFiles) { dex ->
-                        DexItemCard(dex)
+                    if (scanResult != null && scanResult.dexList.isNotEmpty()) {
+                        items(scanResult.dexList) { dex ->
+                            ScanDexItemCard(dex)
+                        }
+                    } else {
+                        items(apk.dexFiles) { dex ->
+                            DexItemCard(dex)
+                        }
                     }
                 }
                 "Native ABIs" -> {
-                    if (apk.nativeLibraries.isEmpty()) {
+                    if (scanResult != null && scanResult.nativeLibrariesList.isNotEmpty()) {
+                        val grouped = scanResult.nativeLibrariesList.groupBy { it.abi }
+                        grouped.forEach { (abi, libs) ->
+                            item {
+                                Card(
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+                                ) {
+                                    Column(modifier = Modifier.padding(14.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(abi, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CyberCyan)
+                                            Text("${libs.size} libraries", fontSize = 11.sp, color = TextMuted)
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        libs.forEach { lib ->
+                                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text("• ${lib.libraryName}", fontSize = 12.sp, color = TextPrimary, fontFamily = FontFamily.Monospace)
+                                                    Text(formatBytes(lib.fileSize), fontSize = 11.sp, color = TextSecondary)
+                                                }
+                                                Text("SHA-256: ${lib.sha256}", fontSize = 9.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = SlateSurfaceVariant),
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, SlateOutline)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text("ABI COVERAGE SUMMARY", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    val is64bit = grouped.keys.any { it.contains("64") }
+                                    val is32bit = grouped.keys.any { !it.contains("64") }
+                                    Text("64-bit Architecture: ${if (is64bit) "Supported" else "Missing"}", fontSize = 11.sp, color = TextPrimary)
+                                    Text("32-bit Architecture: ${if (is32bit) "Supported" else "Missing"}", fontSize = 11.sp, color = TextPrimary)
+                                }
+                            }
+                        }
+                    } else if (apk.nativeLibraries.isEmpty()) {
                         item { Text("Pure Dalvik/ART Java app - no native .so shared libraries.", color = TextMuted, fontSize = 13.sp) }
                     } else {
                         apk.nativeLibraries.forEach { (abi, libs) ->
@@ -430,7 +608,11 @@ fun ApkInspectTab(apk: APKInfo) {
                     }
                 }
                 "Certificates" -> {
-                    if (apk.certificates.isEmpty()) {
+                    if (scanResult != null && scanResult.certificatesList.isNotEmpty()) {
+                        items(scanResult.certificatesList) { cert ->
+                            ScanCertItemCard(cert)
+                        }
+                    } else if (apk.certificates.isEmpty()) {
                         item { Text("No valid X.509 signature block found.", color = AmberWarning, fontSize = 13.sp) }
                     } else {
                         items(apk.certificates) { cert ->
@@ -1355,5 +1537,716 @@ fun formatBytes(bytes: Long): String {
         "${bytes / 1024} KB"
     } else {
         String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
+    }
+}
+
+@Composable
+fun ApkUploadTab(
+    viewModel: WorkbenchViewModel,
+    onSelectApkClick: () -> Unit
+) {
+    val stagedFileName by viewModel.stagedFileName.collectAsState()
+    val stagedFileSize by viewModel.stagedFileSize.collectAsState()
+    val stagedUri by viewModel.stagedUri.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
+    val pipelineStatus by viewModel.scanPipelineStatus.collectAsState()
+    val pipelineMessage by viewModel.scanPipelineMessage.collectAsState()
+    val scanError by viewModel.scanError.collectAsState()
+    val currentScanResult by viewModel.currentScanResult.collectAsState()
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(28.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("SELECT APK FROM STORAGE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                            Text("Real Android Storage Access Framework (SAF)", fontSize = 11.sp, color = TextSecondary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Select an APK from device storage. The pipeline operates strictly read-only on-device, calculating SHA-256/MD5 hashes, decoding the binary AndroidManifest.xml, inspecting DEX headers, cataloging native .so shared libraries, reading X.509 signatures, and evaluating deterministic security findings.",
+                        fontSize = 12.sp,
+                        color = TextPrimary,
+                        lineHeight = 17.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = onSelectApkClick,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("select_apk_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = Color(0xFF00363B))
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Select APK File", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Staged APK details
+        if (stagedFileName != null || stagedUri != null) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = SlateSurfaceVariant),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberCyanDark)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("STAGED APK FOR ANALYSIS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(stagedFileName ?: "Unknown Package", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                Text("Size: ${formatBytes(stagedFileSize ?: 0L)} (${stagedFileSize ?: 0L} bytes)", fontSize = 11.sp, color = TextMuted)
+                            }
+                            if (stagedUri != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = NeonEmerald.copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        text = "READY",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = NeonEmerald,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (!isScanning) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = { viewModel.startStagedAnalysis() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("start_analysis_button"),
+                                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = Color(0xFF00363B))
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Start On-Device Analysis", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Real-time Pipeline Progress Card
+        if (isScanning || pipelineStatus != ScanStatus.QUEUED) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberCyan)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isScanning) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = CyberCyan
+                                    )
+                                } else if (pipelineStatus == ScanStatus.COMPLETED) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = NeonEmerald, modifier = Modifier.size(20.dp))
+                                } else if (pipelineStatus == ScanStatus.FAILED) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = CrimsonError, modifier = Modifier.size(20.dp))
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "PIPELINE: ${pipelineStatus.name}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (pipelineStatus == ScanStatus.COMPLETED) NeonEmerald else if (pipelineStatus == ScanStatus.FAILED) CrimsonError else CyberCyan
+                                )
+                            }
+
+                            if (isScanning) {
+                                OutlinedButton(
+                                    onClick = { viewModel.cancelActiveScan() },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CrimsonError)
+                                ) {
+                                    Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Cancel", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(pipelineMessage, fontSize = 12.sp, color = TextPrimary)
+
+                        if (isScanning) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = CyberCyan,
+                                trackColor = SlateOutline
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Error message card
+        if (scanError != null) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = CrimsonError.copy(alpha = 0.15f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CrimsonError)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = CrimsonError, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("ANALYSIS FAILED", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CrimsonError)
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(scanError!!, fontSize = 12.sp, color = TextPrimary)
+                    }
+                }
+            }
+        }
+
+        // Sample APK fixture card
+        item {
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("BUILT-IN TEST FIXTURE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextMuted, letterSpacing = 1.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("Load the actual installed application package from Android storage into the workbench pipeline to test DEX parsing, manifest extraction, native library listing, and certificate analysis.", fontSize = 12.sp, color = TextSecondary)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.loadSampleApk() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Load Installed Application APK")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ApkSecurityFindingsTab(scanResult: ApkScanResult?) {
+    var selectedSeverity by remember { mutableStateOf<SecuritySeverity?>(null) }
+
+    if (scanResult == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("No scan results available. Import or load an APK first.", color = TextMuted, fontSize = 14.sp)
+        }
+        return
+    }
+
+    val allFindings = scanResult.securityFindings
+    val filteredFindings = if (selectedSeverity == null) allFindings else allFindings.filter { it.severity == selectedSeverity }
+
+    val criticalCount = allFindings.count { it.severity == SecuritySeverity.CRITICAL }
+    val highCount = allFindings.count { it.severity == SecuritySeverity.HIGH }
+    val mediumCount = allFindings.count { it.severity == SecuritySeverity.MEDIUM }
+    val lowCount = allFindings.count { it.severity == SecuritySeverity.LOW }
+    val infoCount = allFindings.count { it.severity == SecuritySeverity.INFO }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("DETERMINISTIC SECURITY AUDIT", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Extracted deterministically from binary manifest flags, permission risk profiles, DEX counts, and signing certificates without simulation.",
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SeverityMetricBadge("Total", allFindings.size, CyberCyan, modifier = Modifier.weight(1f))
+                        SeverityMetricBadge("Critical", criticalCount, CrimsonError, modifier = Modifier.weight(1f))
+                        SeverityMetricBadge("High", highCount, CrimsonError, modifier = Modifier.weight(1f))
+                        SeverityMetricBadge("Medium", mediumCount, AmberWarning, modifier = Modifier.weight(1f))
+                        SeverityMetricBadge("Low", lowCount, Color(0xFFF59E0B), modifier = Modifier.weight(1f))
+                        SeverityMetricBadge("Info", infoCount, NeonEmerald, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        // Filter chips
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChipItem(
+                    label = "All (${allFindings.size})",
+                    selected = selectedSeverity == null,
+                    onClick = { selectedSeverity = null }
+                )
+                FilterChipItem(
+                    label = "Critical ($criticalCount)",
+                    selected = selectedSeverity == SecuritySeverity.CRITICAL,
+                    onClick = { selectedSeverity = SecuritySeverity.CRITICAL }
+                )
+                FilterChipItem(
+                    label = "High ($highCount)",
+                    selected = selectedSeverity == SecuritySeverity.HIGH,
+                    onClick = { selectedSeverity = SecuritySeverity.HIGH }
+                )
+                FilterChipItem(
+                    label = "Medium ($mediumCount)",
+                    selected = selectedSeverity == SecuritySeverity.MEDIUM,
+                    onClick = { selectedSeverity = SecuritySeverity.MEDIUM }
+                )
+                FilterChipItem(
+                    label = "Low ($lowCount)",
+                    selected = selectedSeverity == SecuritySeverity.LOW,
+                    onClick = { selectedSeverity = SecuritySeverity.LOW }
+                )
+                FilterChipItem(
+                    label = "Info ($infoCount)",
+                    selected = selectedSeverity == SecuritySeverity.INFO,
+                    onClick = { selectedSeverity = SecuritySeverity.INFO }
+                )
+            }
+        }
+
+        if (filteredFindings.isEmpty()) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text("No security findings for this filter.", color = TextMuted, fontSize = 13.sp)
+                    }
+                }
+            }
+        } else {
+            items(filteredFindings) { finding ->
+                DeterministicFindingCard(finding)
+            }
+        }
+    }
+}
+
+@Composable
+fun SeverityMetricBadge(label: String, count: Int, color: Color, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = color.copy(alpha = 0.12f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.4f)),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("$count", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = color)
+            Text(label, fontSize = 9.sp, color = TextSecondary, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+fun FilterChipItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) CyberCyan else SlateSurfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) CyberCyan else SlateOutline),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) Color(0xFF00363B) else TextPrimary,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+fun DeterministicFindingCard(finding: SecurityFinding) {
+    val color = when (finding.severity) {
+        SecuritySeverity.CRITICAL -> CrimsonError
+        SecuritySeverity.HIGH -> CrimsonError
+        SecuritySeverity.MEDIUM -> AmberWarning
+        SecuritySeverity.LOW -> Color(0xFFF59E0B)
+        SecuritySeverity.INFO -> NeonEmerald
+    }
+
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(finding.category.name, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = color)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("• ${finding.id.take(8)}", fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = color.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = finding.severity.name,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = color,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(finding.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(finding.description, fontSize = 12.sp, color = TextSecondary, lineHeight = 16.sp)
+
+            if (finding.evidence.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF0B1220))
+                        .padding(8.dp)
+                ) {
+                    Text("EVIDENCE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = finding.evidence,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                Text("💡 ", fontSize = 11.sp)
+                Text(
+                    text = finding.recommendation,
+                    fontSize = 11.sp,
+                    color = CyberCyanLight,
+                    lineHeight = 15.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ManifestInspectSection(manifest: com.example.apk.model.ManifestInfo?, apk: APKInfo) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("BINARY MANIFEST PARAMETERS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                ManifestRow("Package Name", manifest?.packageName ?: apk.packageName, isMono = true)
+                ManifestRow("Application Name", manifest?.appName ?: apk.appName)
+                ManifestRow("Version Name", manifest?.versionName ?: apk.versionName)
+                ManifestRow("Version Code", "${manifest?.versionCode ?: apk.versionCode}")
+                ManifestRow("Min SDK", "API ${manifest?.minSdk ?: apk.minSdk}")
+                ManifestRow("Target SDK", "API ${manifest?.targetSdk ?: apk.targetSdk}")
+                ManifestRow("Compile SDK", "API ${manifest?.compileSdk ?: apk.targetSdk}")
+            }
+        }
+
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("APPLICATION SECURITY FLAGS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                ManifestFlagRow("android:debuggable", manifest?.isDebuggable ?: apk.isDebuggable, isRiskWhenTrue = true)
+                ManifestFlagRow("android:allowBackup", manifest?.allowBackup ?: apk.allowsBackup, isRiskWhenTrue = true)
+                ManifestFlagRow("android:usesCleartextTraffic", manifest?.usesCleartextTraffic ?: true, isRiskWhenTrue = true)
+                ManifestFlagRow("android:supportsRtl", apk.supportsRtl, isRiskWhenTrue = false)
+                ManifestRow("android:networkSecurityConfig", manifest?.networkSecurityConfig ?: "None")
+                ManifestRow("android:theme", manifest?.theme ?: "Default")
+            }
+        }
+
+        if (manifest != null && manifest.usesFeatures.isNotEmpty()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("DECLARED USES-FEATURE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CyberCyan, letterSpacing = 1.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    manifest.usesFeatures.forEach { feat ->
+                        Text("• $feat", fontSize = 11.sp, color = TextPrimary, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ManifestRow(label: String, value: String, isMono: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 11.sp, color = TextSecondary)
+        Text(
+            text = value,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TextPrimary,
+            fontFamily = if (isMono) FontFamily.Monospace else FontFamily.Default
+        )
+    }
+}
+
+@Composable
+fun ManifestFlagRow(label: String, value: Boolean, isRiskWhenTrue: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 11.sp, color = TextSecondary)
+        val color = if (value && isRiskWhenTrue) CrimsonError else if (!value && !isRiskWhenTrue) AmberWarning else NeonEmerald
+        Surface(
+            shape = RoundedCornerShape(4.dp),
+            color = color.copy(alpha = 0.15f)
+        ) {
+            Text(
+                text = value.toString().uppercase(),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun ScanPermissionItemCard(perm: com.example.apk.model.ScanPermissionInfo) {
+    val color = when (perm.riskIndicator) {
+        RiskLevel.CRITICAL -> CrimsonError
+        RiskLevel.HIGH -> CrimsonError
+        RiskLevel.WARNING -> AmberWarning
+        RiskLevel.INFO -> NeonEmerald
+    }
+
+    Card(
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, SlateOutline)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(perm.name.substringAfterLast("."), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = CyberCyanDark.copy(alpha = 0.4f)
+                    ) {
+                        Text(
+                            text = perm.protectionCategory.name,
+                            fontSize = 9.sp,
+                            color = CyberCyan,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = color.copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = perm.riskIndicator.name,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = color,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+            Text(perm.name, fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+            if (perm.reason.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(perm.reason, fontSize = 11.sp, color = TextSecondary)
+            }
+        }
+    }
+}
+
+@Composable
+fun ScanDexItemCard(dex: com.example.apk.model.DexInfo) {
+    Card(
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, SlateOutline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(dex.fileName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text(formatBytes(dex.fileSize), fontSize = 11.sp, color = TextMuted)
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Classes: ${dex.classDefsCount}", fontSize = 11.sp, color = CyberCyan)
+                Text("Magic: ${dex.magic} v${dex.version}", fontSize = 11.sp, color = TextSecondary)
+                Text("Checksum: ${dex.adler32Checksum}", fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("SHA-256: ${dex.sha256}", fontSize = 9.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+            Text("SHA-1 Signature: ${dex.sha1Signature}", fontSize = 9.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+            Spacer(modifier = Modifier.height(6.dp))
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = SlateSurfaceVariant
+            ) {
+                Text(
+                    text = dex.semanticAnalysisStatus,
+                    fontSize = 10.sp,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ScanCertItemCard(cert: com.example.apk.model.ScanCertificateInfo) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+        border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(cert.signatureAlgorithm, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CyberCyan)
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (cert.status == CertificateStatus.CERTIFICATE_VERIFIED) NeonEmerald.copy(alpha = 0.15f) else AmberWarning.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = cert.status.name,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (cert.status == CertificateStatus.CERTIFICATE_VERIFIED) NeonEmerald else AmberWarning,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text("Subject: ${cert.subject}", fontSize = 11.sp, color = TextPrimary)
+            Text("Issuer: ${cert.issuer}", fontSize = 11.sp, color = TextSecondary)
+            Text("Serial Number: ${cert.serialNumber}", fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+            Text("Public Key: ${cert.publicKeyAlgorithm}", fontSize = 10.sp, color = TextSecondary)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("SHA-256: ${cert.sha256Fingerprint}", fontSize = 10.sp, color = CyberCyanLight, fontFamily = FontFamily.Monospace)
+            Text("SHA-1: ${cert.sha1Fingerprint}", fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+            Text("Valid: ${cert.validFrom} to ${cert.validUntil}", fontSize = 10.sp, color = TextMuted)
+
+            if (cert.verificationDetails.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("Note: ${cert.verificationDetails}", fontSize = 11.sp, color = AmberWarning)
+            }
+        }
     }
 }
