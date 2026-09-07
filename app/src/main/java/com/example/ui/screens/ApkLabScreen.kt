@@ -164,7 +164,7 @@ fun ApkLabScreen(
                 if (currentApk == null) {
                     ApkEmptyWorkspaceCard(onImportApkClick, onLoadSample = { viewModel.loadSampleApk() })
                 } else {
-                    ApkInspectTab(apk = currentApk!!, scanResult = currentScanResult)
+                    ApkInspectTab(apk = currentApk!!, scanResult = currentScanResult, viewModel = viewModel)
                 }
             }
             ApkLabSubTab.SECURITY_FINDINGS -> {
@@ -201,6 +201,9 @@ fun ApkLabScreen(
                 } else {
                     ApkExportTab(viewModel, currentApk!!)
                 }
+            }
+            ApkLabSubTab.HISTORY -> {
+                ApkHistoryTab(viewModel = viewModel, onImportApkClick = onImportApkClick)
             }
         }
     }
@@ -436,7 +439,16 @@ fun ApkOverviewTab(
 }
 
 @Composable
-fun ApkInspectTab(apk: APKInfo, scanResult: ApkScanResult? = null) {
+fun ApkInspectTab(
+    apk: APKInfo,
+    scanResult: ApkScanResult? = null,
+    viewModel: WorkbenchViewModel? = null
+) {
+    if (viewModel != null) {
+        ApkInspectionCenterScreen(apk = apk, scanResult = scanResult, viewModel = viewModel)
+        return
+    }
+
     var inspectCategory by remember { mutableStateOf("Manifest") }
     val categories = listOf("Manifest", "Permissions", "Components", "DEX", "Native ABIs", "Assets", "Resources", "Certificates")
 

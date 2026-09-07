@@ -33,6 +33,15 @@ enum class CertificateStatus {
     SIGNATURE_INVALID
 }
 
+data class ArchiveEntryDetail(
+    val name: String,
+    val compressedSize: Long,
+    val uncompressedSize: Long,
+    val compressionMethod: String,
+    val isDirectory: Boolean = false,
+    val crc: Long = 0L
+)
+
 data class ApkFileInfo(
     val scanId: String,
     val fileName: String,
@@ -52,7 +61,8 @@ data class ApkFileInfo(
     val nativeLibraryCount: Int = 0,
     val assetCount: Int = 0,
     val resourcePresence: Boolean = false,
-    val signingRelatedFiles: List<String> = emptyList()
+    val signingRelatedFiles: List<String> = emptyList(),
+    val archiveEntries: List<ArchiveEntryDetail> = emptyList()
 )
 
 data class DexInfo(
@@ -70,7 +80,8 @@ data class DexInfo(
     val protoIdsCount: Int,
     val fieldIdsCount: Int,
     val classNames: List<String> = emptyList(),
-    val semanticAnalysisStatus: String = "Advanced DEX semantic parsing unavailable"
+    val semanticAnalysisStatus: String = "Advanced DEX semantic parsing unavailable",
+    val fileOffset: Long = 0L
 )
 
 data class ManifestInfo(
@@ -95,7 +106,10 @@ data class ManifestInfo(
     val networkSecurityConfig: String?,
     val theme: String?,
     val supportedArchitectures: List<String>,
-    val rawXmlText: String
+    val rawXmlText: String,
+    val dataExtractionRules: String? = null,
+    val allowClearUserData: Boolean? = null,
+    val requestLegacyExternalStorage: Boolean? = null
 )
 
 data class ScanPermissionInfo(
@@ -129,7 +143,12 @@ data class ScanCertificateInfo(
     val verificationDetails: String,
     val isSelfSigned: Boolean,
     val keySizeBits: Int = 2048
-)
+) {
+    val isReadable: Boolean get() = subject != "Unavailable" && sha256Fingerprint != "Unavailable"
+    val isExpired: Boolean get() = status == CertificateStatus.SIGNATURE_INVALID && verificationDetails.contains("expired", ignoreCase = true)
+    val isNotYetValid: Boolean get() = status == CertificateStatus.SIGNATURE_INVALID && verificationDetails.contains("not yet valid", ignoreCase = true)
+    val hasFingerprint: Boolean get() = sha256Fingerprint.isNotBlank() && sha256Fingerprint != "Unavailable"
+}
 
 data class ApkScanResult(
     val scanId: String,

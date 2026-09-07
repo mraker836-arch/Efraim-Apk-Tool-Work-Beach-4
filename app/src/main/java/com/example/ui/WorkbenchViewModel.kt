@@ -33,10 +33,16 @@ import com.example.apk.signing.SigningManager
 import com.example.core.SystemMetrics
 import com.example.core.SystemMonitor
 import com.example.database.ApkProjectEntity
+import com.example.database.ApkScanEntity
 import com.example.database.AppDatabase
 import com.example.database.BuildHistoryEntity
 import com.example.database.ChatMessageEntity
 import com.example.database.ConversationEntity
+import com.example.apk.model.ScanFilter
+import com.example.apk.model.DashboardStatistics
+import com.example.apk.export.ScanReportExporter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import com.example.diagnostics.diana.DianaDiagnosticReport
 import com.example.diagnostics.engine.AuditLogEntry
 import com.example.diagnostics.engine.DiagnosticsEngine
@@ -102,7 +108,8 @@ enum class ApkLabSubTab {
     DIANA_ANALYSIS,
     REBUILD,
     SIGN_VERIFY,
-    EXPORT
+    EXPORT,
+    HISTORY
 }
 
 typealias ChatMessage = com.example.ai.inference.ChatMessage
@@ -182,6 +189,71 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     val scanPipelineStatus = apkScanPipeline.scanStatus
     val scanPipelineMessage = apkScanPipeline.statusMessage
     val currentScanResult = apkScanPipeline.currentResult
+
+    // File 5: Real Scan History, Search, Filters & Persistence Management
+    val allScans: StateFlow<List<ApkScanEntity>> = database.apkScanDao().getAllScans()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _scanFilter = MutableStateFlow(ScanFilter.ALL)
+    val scanFilter: StateFlow<ScanFilter> = _scanFilter.asStateFlow()
+
+    private val _scanSearchQuery = MutableStateFlow("")
+    val scanSearchQuery: StateFlow<String> = _scanSearchQuery.asStateFlow()
+
+    val filteredScans: StateFlow<List<ApkScanEntity>> = combine(
+        allScans,
+        _scanFilter,
+        _scanSearchQuery
+    ) { scans, filter, query ->
+        var list = when (filter) {
+            ScanFilter.ALL -> scans
+            ScanFilter.COMPLETED -> scans.filter { it.status.equals("COMPLETED", ignoreCase = true) }
+            ScanFilter.FAILED -> scans.filter { it.status.equals("FAILED", ignoreCase = true) }
+            ScanFilter.SECURITY_ISSUES -> scans.filter { it.securityFindingCount > 0 }
+            ScanFilter.RECENT -> scans.take(20)
+        }
+        if (query.isNotBlank()) {
+            val q = query.trim().lowercase()
+            list = list.filter {
+                it.fileName.lowercase().contains(q) ||
+                it.sha256.lowercase().contains(q) ||
+                it.packageName.lowercase().contains(q)
+            }
+        }
+        list
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val dashboardStats: StateFlow<DashboardStatistics> = allScans.map { scans ->
+        if (scans.isEmpty()) {
+            DashboardStatistics(isEmpty = true)
+        } else {
+            val total = scans.size
+            val successful = scans.count { it.status.equals("COMPLETED", ignoreCase = true) }
+            val failed = scans.count { it.status.equals("FAILED", ignoreCase = true) }
+            val uniqueApks = scans.map { it.sha256 }.filter { it.isNotBlank() }.distinct().count()
+            val totalFindings = scans.sumOf { it.securityFindingCount }
+            val highSeverity = scans.count { it.securityFindingCount >= 3 }
+            val totalDex = scans.sumOf { it.dexCount }
+            val totalNative = scans.count { it.abiSummary.isNotBlank() && it.abiSummary != "Pure Java / DEX" && it.abiSummary != "Unknown" }
+            DashboardStatistics(
+                totalScans = total,
+                successfulScans = successful,
+                failedScans = failed,
+                apksAnalyzed = uniqueApks,
+                totalSecurityFindings = totalFindings,
+                highSeverityFindings = highSeverity,
+                dexFilesDetected = totalDex,
+                nativeLibrariesDetected = totalNative,
+                isEmpty = false
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardStatistics(isEmpty = true))
+
+    private val _selectedHistoryScan = MutableStateFlow<ApkScanEntity?>(null)
+    val selectedHistoryScan: StateFlow<ApkScanEntity?> = _selectedHistoryScan.asStateFlow()
+
+    private val _exportNotificationMessage = MutableStateFlow<String?>(null)
+    val exportNotificationMessage: StateFlow<String?> = _exportNotificationMessage.asStateFlow()
 
     private val _stagedUri = MutableStateFlow<Uri?>(null)
     val stagedUri: StateFlow<Uri?> = _stagedUri.asStateFlow()
@@ -424,6 +496,104 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
                 _isScanning.value = false
             }
         }
+    }
+
+    fun selectScanFilter(filter: ScanFilter) {
+        _scanFilter.value = filter
+    }
+
+    fun setScanSearchQuery(query: String) {
+        _scanSearchQuery.value = query
+    }
+
+    fun selectHistoryScan(scan: ApkScanEntity) {
+        _selectedHistoryScan.value = scan
+        val scanResult = ScanReportExporter.fromEntity(scan)
+        apkScanPipeline.setCurrentResult(scanResult)
+        val apkFile = if (scan.uriString != null && scan.uriString.startsWith("file:")) {
+            try { java.io.File(java.net.URI.create(scan.uriString)) } catch (_: Exception) { java.io.File(context.cacheDir, "apk_scans/${scan.scanId}.apk") }
+        } else {
+            java.io.File(context.cacheDir, "apk_scans/${scan.scanId}.apk")
+        }
+        val info = scannerService.toApkInfo(scanResult, apkFile)
+        _currentApk.value = info
+        _stagedFileName.value = scan.fileName
+        _stagedFileSize.value = scan.fileSize
+        runDianaAnalysis(info)
+    }
+
+    fun clearSelectedHistoryScan() {
+        _selectedHistoryScan.value = null
+    }
+
+    fun deleteScanRecord(scanId: String) {
+        viewModelScope.launch {
+            try {
+                database.apkScanDao().deleteScan(scanId)
+                if (_selectedHistoryScan.value?.scanId == scanId) {
+                    _selectedHistoryScan.value = null
+                }
+                if (currentScanResult.value?.scanId == scanId) {
+                    apkScanPipeline.setCurrentResult(null)
+                    _currentApk.value = null
+                }
+                // Only delete internal temporary cache files created by the application
+                try {
+                    val tempCache = java.io.File(context.cacheDir, "apk_scans/$scanId.apk")
+                    if (tempCache.exists()) tempCache.delete()
+                } catch (_: Exception) {}
+            } catch (e: Exception) {
+                _scanError.value = "Failed to delete scan record: ${e.message}"
+            }
+        }
+    }
+
+    fun reanalyzeScan(scan: ApkScanEntity) {
+        val uriStr = scan.uriString
+        if (uriStr.isNullOrBlank()) {
+            _scanError.value = "Original APK is no longer accessible. Please import the APK again."
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            val inputStream = context.contentResolver.openInputStream(uri)
+            if (inputStream == null) {
+                _scanError.value = "Original APK is no longer accessible. Please import the APK again."
+                return
+            }
+            inputStream.close()
+            importApkFromUri(uri, scan.fileName)
+        } catch (e: Exception) {
+            _scanError.value = "Original APK is no longer accessible. Please import the APK again."
+        }
+    }
+
+    fun exportScanReport(destinationUri: Uri, isJson: Boolean) {
+        val currentScan = currentScanResult.value
+            ?: _selectedHistoryScan.value?.let { ScanReportExporter.fromEntity(it) }
+
+        if (currentScan == null) {
+            _exportNotificationMessage.value = "No scan available to export."
+            return
+        }
+
+        viewModelScope.launch {
+            val content = if (isJson) {
+                ScanReportExporter.generateJsonReport(currentScan)
+            } else {
+                ScanReportExporter.generatePlainTextReport(currentScan)
+            }
+            val result = ScanReportExporter.writeReportToUri(context, destinationUri, content)
+            result.onSuccess {
+                _exportNotificationMessage.value = "Report exported successfully (${if (isJson) "JSON" else "TXT"})."
+            }.onFailure { e ->
+                _exportNotificationMessage.value = "Export failed: ${e.message}"
+            }
+        }
+    }
+
+    fun clearExportNotification() {
+        _exportNotificationMessage.value = null
     }
 
     fun runDianaAnalysis(apkInfo: APKInfo? = _currentApk.value) {

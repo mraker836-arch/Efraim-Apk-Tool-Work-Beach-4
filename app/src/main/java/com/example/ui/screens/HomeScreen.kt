@@ -52,8 +52,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.apk.model.APKInfo
 import com.example.ui.AppTab
+import com.example.ui.ApkLabSubTab
 import com.example.ui.WorkbenchViewModel
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CrimsonError
@@ -79,6 +81,7 @@ fun HomeScreen(
     val isScanning by viewModel.isScanning.collectAsState()
     val systemMetrics by viewModel.systemMetrics.collectAsState()
     val dianaReport by viewModel.dianaReport.collectAsState()
+    val dashboardStats by viewModel.dashboardStats.collectAsStateWithLifecycle()
     val isModelLoaded = viewModel.inferenceService.isLocalModelLoaded()
     val loadedModel = viewModel.inferenceService.getLoadedModelName()
 
@@ -297,6 +300,113 @@ fun HomeScreen(
                                 modifier = Modifier.testTag("home_sample_button")
                             ) {
                                 Text("Load Sample APK")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Real APK Scan Dashboard & Repository Stats
+        item {
+            Text(
+                text = "APK SCAN REPOSITORY & METRICS",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextMuted,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(start = 4.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("scan_repository_metrics_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SlateOutline)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Scan History Engine",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Real APK scan records stored in Room DB",
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.selectTab(AppTab.APK_LAB)
+                                viewModel.selectApkLabSubTab(ApkLabSubTab.HISTORY)
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = CyberCyan)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("View All Scans", fontSize = 11.sp, color = CyberCyan)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    if (dashboardStats.isEmpty || dashboardStats.totalScans == 0) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            color = SlateSurfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "No APK scans recorded yet",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Import or analyze an APK in APK Lab to populate real workbench metrics.",
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    } else {
+                        // 2x4 Metric Grid
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                MetricChip(label = "TOTAL SCANS", value = "${dashboardStats.totalScans}", color = CyberCyan, modifier = Modifier.weight(1f))
+                                MetricChip(label = "SUCCESSFUL", value = "${dashboardStats.successfulScans}", color = NeonEmerald, modifier = Modifier.weight(1f))
+                                MetricChip(label = "FAILED", value = "${dashboardStats.failedScans}", color = if (dashboardStats.failedScans > 0) CrimsonError else TextSecondary, modifier = Modifier.weight(1f))
+                                MetricChip(label = "APKS ANALYZED", value = "${dashboardStats.apksAnalyzed}", color = CyberCyan, modifier = Modifier.weight(1f))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                MetricChip(label = "TOTAL FINDINGS", value = "${dashboardStats.totalSecurityFindings}", color = if (dashboardStats.totalSecurityFindings > 0) AmberWarning else NeonEmerald, modifier = Modifier.weight(1f))
+                                MetricChip(label = "HIGH SEVERITY", value = "${dashboardStats.highSeverityFindings}", color = if (dashboardStats.highSeverityFindings > 0) CrimsonError else NeonEmerald, modifier = Modifier.weight(1f))
+                                MetricChip(label = "DEX DETECTED", value = "${dashboardStats.dexFilesDetected}", color = CyberCyan, modifier = Modifier.weight(1f))
+                                MetricChip(label = "NATIVE LIBS", value = "${dashboardStats.nativeLibrariesDetected}", color = ElectricPurple, modifier = Modifier.weight(1f))
                             }
                         }
                     }
@@ -606,8 +716,9 @@ fun InfoTag(label: String, value: String) {
 }
 
 @Composable
-fun MetricChip(label: String, value: String, color: Color) {
+fun MetricChip(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Surface(
+        modifier = modifier,
         shape = RoundedCornerShape(10.dp),
         color = SlateSurfaceVariant.copy(alpha = 0.8f),
         border = androidx.compose.foundation.BorderStroke(0.5.dp, SlateOutline)

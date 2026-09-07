@@ -112,11 +112,19 @@ class ApkBuildManager(
     fun cancelBuild() {
         isCancelled.set(true)
         val proc = activeProcess
-        if (proc != null && proc.isAlive) {
-            try {
-                proc.destroy()
-                proc.destroyForcibly()
-            } catch (_: Exception) {}
+        if (proc != null) {
+            val isAlive = try {
+                proc.exitValue()
+                false
+            } catch (_: IllegalThreadStateException) {
+                true
+            }
+            if (isAlive) {
+                try {
+                    proc.destroy()
+                    proc.destroyForcibly()
+                } catch (_: Exception) {}
+            }
         }
         _buildStatus.value = BuildStatus.CANCELLED
         val logEntry = BuildLog(

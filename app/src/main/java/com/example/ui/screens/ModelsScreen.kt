@@ -22,7 +22,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -159,7 +159,7 @@ fun ModelsScreen(viewModel: WorkbenchViewModel) {
                                 imageVector = when (serverState) {
                                     ServerConnectionState.AVAILABLE -> Icons.Default.CheckCircle
                                     ServerConnectionState.CHECKING -> Icons.Default.Refresh
-                                    ServerConnectionState.UNCONFIGURED -> Icons.Default.HelpOutline
+                                    ServerConnectionState.UNCONFIGURED -> Icons.AutoMirrored.Filled.HelpOutline
                                     ServerConnectionState.AUTHENTICATION_ERROR -> Icons.Default.Warning
                                     else -> Icons.Default.Error
                                 },

@@ -48,6 +48,14 @@ class ApkScanPipeline(
     private val _currentResult = MutableStateFlow<ApkScanResult?>(null)
     val currentResult: StateFlow<ApkScanResult?> = _currentResult.asStateFlow()
 
+    fun setCurrentResult(result: ApkScanResult?) {
+        _currentResult.value = result
+        if (result != null) {
+            _scanStatus.value = result.status
+            _statusMessage.value = "Loaded scan: ${result.scanId}"
+        }
+    }
+
     suspend fun scanFromUri(
         context: Context,
         uri: Uri,
@@ -181,7 +189,12 @@ class ApkScanPipeline(
                         abiSummary = if (result.abiCoverage.isEmpty()) "Pure Java / DEX" else result.abiCoverage.joinToString(),
                         certificateSummary = result.certificatesList.firstOrNull()?.let { "${it.subject} [${it.status}]" } ?: "No Signature",
                         securityFindingCount = result.securityFindings.size,
-                        errorMessage = result.errorMessage
+                        errorMessage = result.errorMessage,
+                        permissionCount = result.permissionsList.size,
+                        certificateStatus = result.certificatesList.firstOrNull()?.status?.name ?: if (result.fileInfo.signingRelatedFiles.isNotEmpty()) CertificateStatus.SIGNATURE_FILES_PRESENT.name else CertificateStatus.SIGNATURE_UNAVAILABLE.name,
+                        packageName = result.manifestInfo.packageName,
+                        uriString = result.fileInfo.uri,
+                        rawJson = com.example.apk.export.ScanReportExporter.generateJsonReport(result)
                     )
                     dao.insertScan(scanEntity)
                 } catch (_: Exception) {
@@ -196,11 +209,63 @@ class ApkScanPipeline(
         } catch (e: CancellationException) {
             _scanStatus.value = ScanStatus.FAILED
             _statusMessage.value = "Analysis cancelled by user"
+            apkScanDao?.let { dao ->
+                try {
+                    dao.insertScan(
+                        ApkScanEntity(
+                            scanId = scanId,
+                            fileName = fileNameHint ?: uri.lastPathSegment ?: "unknown.apk",
+                            fileSize = 0L,
+                            sha256 = "",
+                            md5 = "",
+                            timestamp = System.currentTimeMillis(),
+                            status = "CANCELLED",
+                            manifestSummary = "Scan cancelled",
+                            dexCount = 0,
+                            abiSummary = "Unknown",
+                            certificateSummary = "Unknown",
+                            securityFindingCount = 0,
+                            errorMessage = "Analysis cancelled by user",
+                            permissionCount = 0,
+                            certificateStatus = CertificateStatus.SIGNATURE_UNAVAILABLE.name,
+                            packageName = "",
+                            uriString = uri.toString(),
+                            rawJson = null
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
             tempApkFile.delete()
             throw e
         } catch (e: Exception) {
             _scanStatus.value = ScanStatus.FAILED
             _statusMessage.value = "Analysis failed: ${e.localizedMessage ?: e.message}"
+            apkScanDao?.let { dao ->
+                try {
+                    dao.insertScan(
+                        ApkScanEntity(
+                            scanId = scanId,
+                            fileName = fileNameHint ?: uri.lastPathSegment ?: "unknown.apk",
+                            fileSize = 0L,
+                            sha256 = "",
+                            md5 = "",
+                            timestamp = System.currentTimeMillis(),
+                            status = ScanStatus.FAILED.name,
+                            manifestSummary = "Analysis failed",
+                            dexCount = 0,
+                            abiSummary = "Unknown",
+                            certificateSummary = "Unknown",
+                            securityFindingCount = 0,
+                            errorMessage = e.localizedMessage ?: e.message ?: "Analysis failed",
+                            permissionCount = 0,
+                            certificateStatus = CertificateStatus.SIGNATURE_UNAVAILABLE.name,
+                            packageName = "",
+                            uriString = uri.toString(),
+                            rawJson = null
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
             tempApkFile.delete()
             Result.failure(e)
         }
@@ -216,8 +281,26 @@ class ApkScanPipeline(
             }
 
             val fileSize = file.length()
+            if (fileSize == 0L) {
+                _scanStatus.value = ScanStatus.FAILED
+                _statusMessage.value = "Invalid file: APK file is empty (0 bytes)"
+                return@withContext Result.failure(IllegalArgumentException("Target APK file is empty (0 bytes)"))
+            }
             if (fileSize > maxApkSizeBytes) {
+                _scanStatus.value = ScanStatus.FAILED
+                _statusMessage.value = "File exceeds maximum size limit (500 MB)"
                 return@withContext Result.failure(IllegalArgumentException("File size exceeds maximum limit."))
+            }
+
+            // Validate ZIP magic header: 0x50 0x4B 0x03 0x04 (PK\x03\x04)
+            val headerBuffer = ByteArray(4)
+            val headerRead = file.inputStream().use { it.read(headerBuffer) }
+            if (headerRead < 4 || headerBuffer[0] != 0x50.toByte() || headerBuffer[1] != 0x4B.toByte() ||
+                headerBuffer[2] != 0x03.toByte() || headerBuffer[3] != 0x04.toByte()
+            ) {
+                _scanStatus.value = ScanStatus.FAILED
+                _statusMessage.value = "Invalid file: Not a valid ZIP/APK archive"
+                return@withContext Result.failure(IllegalArgumentException("File is not a valid APK/ZIP archive (magic header mismatch)."))
             }
 
             _scanStatus.value = ScanStatus.HASHING
@@ -250,6 +333,35 @@ class ApkScanPipeline(
                 mimeType = "application/vnd.android.package-archive"
             )
 
+            // Persist to Room
+            apkScanDao?.let { dao ->
+                try {
+                    val scanEntity = ApkScanEntity(
+                        scanId = result.scanId,
+                        fileName = result.fileInfo.fileName,
+                        fileSize = result.fileInfo.fileSize,
+                        sha256 = result.fileInfo.sha256,
+                        md5 = result.fileInfo.md5,
+                        timestamp = result.completedAt,
+                        status = result.status.name,
+                        manifestSummary = "${result.manifestInfo.packageName} v${result.manifestInfo.versionName} (${result.manifestInfo.versionCode})",
+                        dexCount = result.fileInfo.dexCount,
+                        abiSummary = if (result.abiCoverage.isEmpty()) "Pure Java / DEX" else result.abiCoverage.joinToString(),
+                        certificateSummary = result.certificatesList.firstOrNull()?.let { "${it.subject} [${it.status}]" } ?: "No Signature",
+                        securityFindingCount = result.securityFindings.size,
+                        errorMessage = result.errorMessage,
+                        permissionCount = result.permissionsList.size,
+                        certificateStatus = result.certificatesList.firstOrNull()?.status?.name ?: if (result.fileInfo.signingRelatedFiles.isNotEmpty()) CertificateStatus.SIGNATURE_FILES_PRESENT.name else CertificateStatus.SIGNATURE_UNAVAILABLE.name,
+                        packageName = result.manifestInfo.packageName,
+                        uriString = result.fileInfo.uri,
+                        rawJson = com.example.apk.export.ScanReportExporter.generateJsonReport(result)
+                    )
+                    dao.insertScan(scanEntity)
+                } catch (_: Exception) {
+                    // Fail gracefully on persistence error
+                }
+            }
+
             _currentResult.value = result
             _scanStatus.value = ScanStatus.COMPLETED
             _statusMessage.value = "Analysis completed"
@@ -257,6 +369,32 @@ class ApkScanPipeline(
         } catch (e: Exception) {
             _scanStatus.value = ScanStatus.FAILED
             _statusMessage.value = "Analysis failed: ${e.message}"
+            apkScanDao?.let { dao ->
+                try {
+                    dao.insertScan(
+                        ApkScanEntity(
+                            scanId = scanId,
+                            fileName = file.name,
+                            fileSize = file.length().coerceAtLeast(0L),
+                            sha256 = "",
+                            md5 = "",
+                            timestamp = System.currentTimeMillis(),
+                            status = ScanStatus.FAILED.name,
+                            manifestSummary = "Analysis failed",
+                            dexCount = 0,
+                            abiSummary = "Unknown",
+                            certificateSummary = "Unknown",
+                            securityFindingCount = 0,
+                            errorMessage = e.localizedMessage ?: e.message ?: "Analysis failed",
+                            permissionCount = 0,
+                            certificateStatus = CertificateStatus.SIGNATURE_UNAVAILABLE.name,
+                            packageName = "",
+                            uriString = file.toURI().toString(),
+                            rawJson = null
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
             Result.failure(e)
         }
     }

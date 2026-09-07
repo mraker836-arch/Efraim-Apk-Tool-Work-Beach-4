@@ -69,5 +69,10 @@ data class ApkScanEntity(
     val abiSummary: String,
     val certificateSummary: String,
     val securityFindingCount: Int,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val permissionCount: Int = 0,
+    val certificateStatus: String = "SIGNATURE_UNAVAILABLE",
+    val packageName: String = "",
+    val uriString: String? = null,
+    val rawJson: String? = null
 )
