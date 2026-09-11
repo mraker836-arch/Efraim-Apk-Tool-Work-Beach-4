@@ -59,7 +59,8 @@ class ApkScanPipeline(
     suspend fun scanFromUri(
         context: Context,
         uri: Uri,
-        fileNameHint: String? = null
+        fileNameHint: String? = null,
+        isSample: Boolean = false
     ): Result<ApkScanResult> = withContext(Dispatchers.IO) {
         val scanId = "SCAN-${UUID.randomUUID().toString().take(8).uppercase()}"
         _scanStatus.value = ScanStatus.QUEUED
@@ -104,6 +105,7 @@ class ApkScanPipeline(
 
         // 3. Stage APK to isolated sandbox cache for random-access Zip parsing
         val tempDir = File(context.cacheDir, "apk_scans").apply { mkdirs() }
+        purgeStaleSandboxFiles(tempDir)
         val tempApkFile = File(tempDir, "$scanId.apk")
 
         try {
@@ -170,7 +172,8 @@ class ApkScanPipeline(
                 sha256 = sha256,
                 md5 = md5,
                 uriString = uri.toString(),
-                mimeType = "application/vnd.android.package-archive"
+                mimeType = "application/vnd.android.package-archive",
+                isSample = isSample
             )
 
             // Persist to Room
@@ -273,7 +276,9 @@ class ApkScanPipeline(
 
     suspend fun scanFromFile(
         file: File,
-        scanId: String = "SCAN-${UUID.randomUUID().toString().take(8).uppercase()}"
+        scanId: String = "SCAN-${UUID.randomUUID().toString().take(8).uppercase()}",
+        fileNameHint: String? = null,
+        isSample: Boolean = false
     ): Result<ApkScanResult> = withContext(Dispatchers.IO) {
         try {
             if (!file.exists() || !file.canRead()) {
@@ -325,12 +330,13 @@ class ApkScanPipeline(
             val result = executeAnalysis(
                 apkFile = file,
                 scanId = scanId,
-                fileName = file.name,
+                fileName = fileNameHint ?: file.name,
                 fileSize = fileSize,
                 sha256 = sha256,
                 md5 = md5,
                 uriString = file.toURI().toString(),
-                mimeType = "application/vnd.android.package-archive"
+                mimeType = "application/vnd.android.package-archive",
+                isSample = isSample
             )
 
             // Persist to Room
@@ -407,9 +413,20 @@ class ApkScanPipeline(
         sha256: String,
         md5: String,
         uriString: String,
-        mimeType: String
+        mimeType: String,
+        isSample: Boolean = false
     ): ApkScanResult {
         currentCoroutineContext().ensureActive()
+
+        val deepScanResult = try {
+            com.example.apk.scanner.deep.RealApkDeepScanner.performDeepScan(
+                apkFile = apkFile,
+                fileNameHint = fileName,
+                isSample = isSample
+            ).getOrNull()
+        } catch (_: Exception) {
+            null
+        }
 
         // 1. Inspect archive entries
         _scanStatus.value = ScanStatus.INSPECTING_ARCHIVE
@@ -425,6 +442,7 @@ class ApkScanPipeline(
         val nativeLibEntries = mutableListOf<Pair<String, ZipEntry>>()
         val signingFiles = mutableListOf<String>()
         var manifestEntry: ZipEntry? = null
+        var arscEntry: ZipEntry? = null
         val signatureBlockBytes = mutableListOf<ByteArray>()
 
         val zipFile = ZipFile(apkFile)
@@ -447,7 +465,10 @@ class ApkScanPipeline(
                 when {
                     name == "AndroidManifest.xml" -> manifestEntry = entry
                     name.startsWith("classes") && name.endsWith(".dex") -> dexEntries.add(name)
-                    name == "resources.arsc" -> hasResources = true
+                    name == "resources.arsc" -> {
+                        hasResources = true
+                        arscEntry = entry
+                    }
                     name.startsWith("assets/") -> assetCount++
                     name.startsWith("lib/") && name.endsWith(".so") -> nativeLibEntries.add(name to entry)
                     name.startsWith("META-INF/") -> {
@@ -684,8 +705,24 @@ class ApkScanPipeline(
                 nativeLibraryCount = nativeLibsList.size,
                 assetCount = assetCount,
                 resourcePresence = hasResources,
-                signingRelatedFiles = signingFiles
+                signingRelatedFiles = signingFiles,
+                archiveEntries = deepScanResult?.archiveEntries?.map { it.toArchiveEntryDetail() } ?: emptyList()
             )
+
+            val resourceStrings = if (arscEntry != null) {
+                try {
+                    val arscBytes = zipFile.getInputStream(arscEntry).use { it.readBytes() }
+                    val parsed = ArscParser.parse(arscBytes)
+                    parsed.strings.map { it.value }.filter { it.isNotBlank() }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+
+            val combinedSecurityFindings = (securityFindings + (deepScanResult?.riskFindings?.map { it.toSecurityFinding() } ?: emptyList()))
+                .distinctBy { it.id to it.title }
 
             return ApkScanResult(
                 scanId = scanId,
@@ -696,15 +733,46 @@ class ApkScanPipeline(
                 nativeLibrariesList = nativeLibsList,
                 abiCoverage = abiCoverage,
                 certificatesList = certificatesList,
-                securityFindings = securityFindings,
+                securityFindings = combinedSecurityFindings,
                 status = ScanStatus.COMPLETED,
                 errorMessage = null,
-                completedAt = System.currentTimeMillis()
+                completedAt = System.currentTimeMillis(),
+                resourceStrings = resourceStrings,
+                isSample = isSample,
+                scanDurationMs = deepScanResult?.scanDurationMs ?: 0L,
+                scannerVersion = deepScanResult?.scannerVersion ?: "2.5.0-static-deep",
+                signatureInfo = deepScanResult?.signatureInfo,
+                scanSummary = deepScanResult?.summary,
+                deepRiskFindings = deepScanResult?.riskFindings ?: emptyList(),
+                deepScanResult = deepScanResult
             )
         } finally {
             try {
                 zipFile.close()
             } catch (_: Exception) {}
+        }
+    }
+
+    companion object {
+        private const val STALE_FILE_EXPIRY_MS = 24 * 60 * 60 * 1000L // 24 hours
+
+        /**
+         * Auto-purges temporary sandbox files older than 24 hours to prevent cache exhaustion.
+         */
+        fun purgeStaleSandboxFiles(sandboxDir: File, maxAgeMs: Long = STALE_FILE_EXPIRY_MS): Int {
+            if (!sandboxDir.exists() || !sandboxDir.isDirectory) return 0
+            val now = System.currentTimeMillis()
+            var deletedCount = 0
+            try {
+                sandboxDir.listFiles()?.forEach { file ->
+                    if (file.isFile && (now - file.lastModified() > maxAgeMs)) {
+                        if (file.delete()) {
+                            deletedCount++
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+            return deletedCount
         }
     }
 }

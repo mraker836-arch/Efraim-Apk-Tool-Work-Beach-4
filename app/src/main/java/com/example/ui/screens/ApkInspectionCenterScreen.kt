@@ -33,6 +33,7 @@ import com.example.apk.model.*
 import com.example.security.model.SecurityFinding
 import com.example.security.model.SecuritySeverity
 import com.example.ui.WorkbenchViewModel
+import com.example.ui.components.ResourceTableInspector
 import com.example.ui.theme.*
 import java.io.File
 import java.util.Locale
@@ -42,6 +43,7 @@ enum class InspectionTab(val title: String, val icon: ImageVector) {
     ARCHIVE("Archive", Icons.Default.FolderZip),
     DEX("DEX", Icons.Default.Memory),
     MANIFEST("Manifest", Icons.Default.Code),
+    RESOURCES("Resources", Icons.Default.Article),
     PERMISSIONS("Permissions", Icons.Default.VpnKey),
     NATIVE_LIBS("Native Libs", Icons.Default.Layers),
     CERTIFICATE("Cert & Sign", Icons.Default.VerifiedUser),
@@ -241,6 +243,23 @@ fun ApkInspectionCenterScreen(
                 InspectionTab.ARCHIVE -> ArchiveInspectionSection(archiveSummary, context)
                 InspectionTab.DEX -> DexInspectionSection(apk, scanResult, context)
                 InspectionTab.MANIFEST -> ManifestIntelligenceSection(apk, scanResult, context)
+                InspectionTab.RESOURCES -> {
+                    val strings = scanResult?.manifestInfo?.rawXmlText?.let { xml ->
+                        // Extract text tokens or fallback to components and actions
+                        val list = mutableListOf<String>()
+                        list.addAll(scanResult.manifestInfo.activities.map { it.name })
+                        list.addAll(scanResult.manifestInfo.services.map { it.name })
+                        list.addAll(scanResult.manifestInfo.receivers.map { it.name })
+                        list.addAll(scanResult.manifestInfo.providers.map { it.name })
+                        list.addAll(scanResult.manifestInfo.permissions)
+                        list.addAll(scanResult.manifestInfo.usesFeatures)
+                        list.distinct()
+                    } ?: (apk.permissions.map { it.name } + apk.activities.map { it.name } + apk.services.map { it.name })
+                    ResourceTableInspector(
+                        resourceStrings = strings,
+                        totalStringPoolCount = strings.size
+                    )
+                }
                 InspectionTab.PERMISSIONS -> PermissionsIntelligenceSection(apk, scanResult, context)
                 InspectionTab.NATIVE_LIBS -> NativeLibrariesSection(apk, scanResult, context)
                 InspectionTab.CERTIFICATE -> CertificateAndSignatureSection(apk, scanResult, context)

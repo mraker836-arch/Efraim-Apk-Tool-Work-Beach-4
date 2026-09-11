@@ -69,6 +69,7 @@ fun ApkHistoryTab(
     val scans by viewModel.filteredScans.collectAsStateWithLifecycle()
     val allScans by viewModel.allScans.collectAsStateWithLifecycle()
     val currentFilter by viewModel.scanFilter.collectAsStateWithLifecycle()
+    val currentSort by viewModel.scanSortOption.collectAsStateWithLifecycle()
     val searchQuery by viewModel.scanSearchQuery.collectAsStateWithLifecycle()
     val selectedHistoryScan by viewModel.selectedHistoryScan.collectAsStateWithLifecycle()
     val currentScanResult by viewModel.currentScanResult.collectAsStateWithLifecycle()
@@ -78,6 +79,7 @@ fun ApkHistoryTab(
     var scanToDelete by remember { mutableStateOf<ApkScanEntity?>(null) }
     var scanToExport by remember { mutableStateOf<ApkScanResult?>(null) }
     var exportIsJson by remember { mutableStateOf(false) }
+    var showSortMenu by remember { mutableStateOf(false) }
 
     // SAF File Creator Launcher
     val exportLauncher = rememberLauncherForActivityResult(
@@ -235,15 +237,70 @@ fun ApkHistoryTab(
             )
         }
 
-        // Filter Chips
+        // Filter and Sort Chips
         item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ScanFilter.values().forEach { filter ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box {
+                        AssistChip(
+                            onClick = { showSortMenu = true },
+                            label = {
+                                Text(
+                                    text = "Sort: ${when (currentSort) {
+                                        ScanSortOption.TIMESTAMP_DESC -> "Newest First"
+                                        ScanSortOption.TIMESTAMP_ASC -> "Oldest First"
+                                        ScanSortOption.NAME_ASC -> "Name (A-Z)"
+                                        ScanSortOption.FILE_SIZE_DESC -> "Largest Size"
+                                        ScanSortOption.FILE_SIZE_ASC -> "Smallest Size"
+                                        ScanSortOption.FINDINGS_COUNT_DESC -> "Most Findings"
+                                    }}",
+                                    fontSize = 11.sp,
+                                    color = CyberCyan
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Sort, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+                            },
+                            colors = AssistChipDefaults.assistChipColors(containerColor = SlateSurfaceCard),
+                            border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = CyberCyan.copy(alpha = 0.5f))
+                        )
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false },
+                            containerColor = SlateSurfaceCard
+                        ) {
+                            ScanSortOption.values().forEach { option ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            when (option) {
+                                                ScanSortOption.TIMESTAMP_DESC -> "Newest First"
+                                                ScanSortOption.TIMESTAMP_ASC -> "Oldest First"
+                                                ScanSortOption.NAME_ASC -> "File Name (A-Z)"
+                                                ScanSortOption.FILE_SIZE_DESC -> "File Size (Largest)"
+                                                ScanSortOption.FILE_SIZE_ASC -> "File Size (Smallest)"
+                                                ScanSortOption.FINDINGS_COUNT_DESC -> "Findings Count (Highest)"
+                                            },
+                                            color = if (currentSort == option) CyberCyan else TextPrimary,
+                                            fontWeight = if (currentSort == option) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        viewModel.selectScanSortOption(option)
+                                        showSortMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    ScanFilter.values().forEach { filter ->
                     val isSelected = currentFilter == filter
                     FilterChip(
                         selected = isSelected,
@@ -275,6 +332,7 @@ fun ApkHistoryTab(
                         )
                     )
                 }
+            }
             }
         }
 
@@ -324,6 +382,10 @@ fun ApkHistoryTab(
                     onInspect = { viewModel.selectHistoryScan(scan) },
                     onReanalyze = { viewModel.reanalyzeScan(scan) },
                     onDelete = { scanToDelete = scan },
+                    onSelectForDiff = {
+                        viewModel.selectForDiff(scan)
+                        viewModel.selectApkLabSubTab(com.example.ui.ApkLabSubTab.DIFF)
+                    },
                     onExport = { isJson ->
                         exportIsJson = isJson
                         val scanResult = ScanReportExporter.fromEntity(scan)
@@ -343,6 +405,7 @@ fun ScanHistoryCard(
     onInspect: () -> Unit,
     onReanalyze: () -> Unit,
     onDelete: () -> Unit,
+    onSelectForDiff: () -> Unit,
     onExport: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -455,6 +518,14 @@ fun ScanHistoryCard(
                                 onReanalyze()
                             },
                             leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = NeonEmerald) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Compare in Diff Tool", color = CyberCyan) },
+                            onClick = {
+                                showMenu = false
+                                onSelectForDiff()
+                            },
+                            leadingIcon = { Icon(Icons.Default.CompareArrows, contentDescription = null, tint = CyberCyan) }
                         )
                         HorizontalDivider(color = SlateOutline)
                         DropdownMenuItem(

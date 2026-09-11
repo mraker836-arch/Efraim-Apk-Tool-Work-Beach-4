@@ -30,6 +30,9 @@ import com.example.apk.inspection.SecurityScoreBreakdown
 import com.example.apk.model.*
 import com.example.security.model.SecurityFinding
 import com.example.security.model.SecuritySeverity
+import com.example.ui.components.DexMethodClassBrowser
+import com.example.ui.components.ManifestXmlViewer
+import com.example.ui.components.NativeLibraryAbiBreakdownCard
 import com.example.ui.theme.*
 import java.util.Locale
 
@@ -363,6 +366,10 @@ fun DexInspectionSection(apk: APKInfo, scanResult: ApkScanResult?, context: Cont
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
+            DexMethodClassBrowser(dexList = dexList)
+        }
+
+        item {
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = SlateSurfaceCard),
@@ -423,7 +430,7 @@ fun DexInspectionSection(apk: APKInfo, scanResult: ApkScanResult?, context: Cont
 @Composable
 fun ManifestIntelligenceSection(apk: APKInfo, scanResult: ApkScanResult?, context: Context) {
     var manifestTab by remember { mutableStateOf("Application") }
-    val tabs = listOf("Application", "Activities", "Services", "Receivers", "Providers", "Permissions", "Features")
+    val tabs = listOf("Application", "Activities", "Services", "Receivers", "Providers", "Permissions", "Features", "Raw XML")
 
     val man = scanResult?.manifestInfo
 
@@ -455,12 +462,18 @@ fun ManifestIntelligenceSection(apk: APKInfo, scanResult: ApkScanResult?, contex
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            when (manifestTab) {
-                "Application" -> {
+        if (manifestTab == "Raw XML") {
+            ManifestXmlViewer(
+                manifest = man,
+                rawXml = man?.rawXmlText
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                when (manifestTab) {
+                    "Application" -> {
                     item {
                         Card(
                             shape = RoundedCornerShape(12.dp),
@@ -584,6 +597,7 @@ fun ManifestIntelligenceSection(apk: APKInfo, scanResult: ApkScanResult?, contex
             }
         }
     }
+}
 }
 
 @Composable
@@ -795,6 +809,13 @@ fun NativeLibrariesSection(apk: APKInfo, scanResult: ApkScanResult?, context: Co
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        item {
+            NativeLibraryAbiBreakdownCard(
+                nativeLibs = libs,
+                abiCoverage = abis
+            )
+        }
+
         item {
             Card(
                 shape = RoundedCornerShape(12.dp),

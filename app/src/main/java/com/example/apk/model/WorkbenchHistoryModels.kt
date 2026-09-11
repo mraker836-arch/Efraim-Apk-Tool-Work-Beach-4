@@ -8,6 +8,15 @@ enum class ScanFilter {
     RECENT
 }
 
+enum class ScanSortOption {
+    TIMESTAMP_DESC,
+    TIMESTAMP_ASC,
+    FILE_SIZE_DESC,
+    FILE_SIZE_ASC,
+    FINDINGS_COUNT_DESC,
+    NAME_ASC
+}
+
 data class DashboardStatistics(
     val totalScans: Int = 0,
     val successfulScans: Int = 0,

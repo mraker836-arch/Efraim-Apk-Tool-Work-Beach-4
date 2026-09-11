@@ -15,7 +15,8 @@ class AxmlParser {
         val exported: Boolean,
         val permission: String? = null,
         val intentActions: List<String> = emptyList(),
-        val intentCategories: List<String> = emptyList()
+        val intentCategories: List<String> = emptyList(),
+        val enabled: Boolean = true
     )
 
     data class ParsedManifest(
@@ -85,6 +86,7 @@ class AxmlParser {
         var currentComponentType: String? = null
         var currentComponentName: String = ""
         var currentComponentExported: Boolean? = null
+        var currentComponentEnabled: Boolean = true
         var currentComponentPermission: String? = null
         val currentComponentActions = mutableListOf<String>()
         val currentComponentCategories = mutableListOf<String>()
@@ -102,7 +104,8 @@ class AxmlParser {
                 exported = isExported,
                 permission = currentComponentPermission,
                 intentActions = currentComponentActions.toList(),
-                intentCategories = currentComponentCategories.toList()
+                intentCategories = currentComponentCategories.toList(),
+                enabled = currentComponentEnabled
             )
             when (type) {
                 "Activity" -> activities.add(detail)
@@ -113,6 +116,7 @@ class AxmlParser {
             currentComponentType = null
             currentComponentName = ""
             currentComponentExported = null
+            currentComponentEnabled = true
             currentComponentPermission = null
             currentComponentActions.clear()
             currentComponentCategories.clear()
@@ -225,6 +229,7 @@ class AxmlParser {
                             currentComponentType = "Activity"
                             currentComponentName = attributes["name"] ?: ""
                             currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentEnabled = attributes["enabled"]?.let { it.equals("true", ignoreCase = true) || it == "1" } ?: true
                             currentComponentPermission = attributes["permission"]
                         }
                         "service" -> {
@@ -232,6 +237,7 @@ class AxmlParser {
                             currentComponentType = "Service"
                             currentComponentName = attributes["name"] ?: ""
                             currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentEnabled = attributes["enabled"]?.let { it.equals("true", ignoreCase = true) || it == "1" } ?: true
                             currentComponentPermission = attributes["permission"]
                         }
                         "receiver" -> {
@@ -239,6 +245,7 @@ class AxmlParser {
                             currentComponentType = "Receiver"
                             currentComponentName = attributes["name"] ?: ""
                             currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentEnabled = attributes["enabled"]?.let { it.equals("true", ignoreCase = true) || it == "1" } ?: true
                             currentComponentPermission = attributes["permission"]
                         }
                         "provider" -> {
@@ -246,6 +253,7 @@ class AxmlParser {
                             currentComponentType = "Provider"
                             currentComponentName = attributes["name"] ?: ""
                             currentComponentExported = attributes["exported"]?.let { it.equals("true", ignoreCase = true) || it == "1" }
+                            currentComponentEnabled = attributes["enabled"]?.let { it.equals("true", ignoreCase = true) || it == "1" } ?: true
                             currentComponentPermission = attributes["permission"]
                         }
                         "intent-filter" -> {

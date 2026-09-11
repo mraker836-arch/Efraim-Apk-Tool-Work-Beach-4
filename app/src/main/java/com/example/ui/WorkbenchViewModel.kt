@@ -38,8 +38,13 @@ import com.example.database.AppDatabase
 import com.example.database.BuildHistoryEntity
 import com.example.database.ChatMessageEntity
 import com.example.database.ConversationEntity
+import com.example.apk.model.ApkScanResult
 import com.example.apk.model.ScanFilter
+import com.example.apk.model.ScanSortOption
 import com.example.apk.model.DashboardStatistics
+import com.example.apk.batch.BatchScanManager
+import com.example.apk.diff.ApkDiffEngine
+import com.example.apk.diff.ApkDiffReport
 import com.example.apk.export.ScanReportExporter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
@@ -109,7 +114,9 @@ enum class ApkLabSubTab {
     REBUILD,
     SIGN_VERIFY,
     EXPORT,
-    HISTORY
+    HISTORY,
+    BATCH,
+    DIFF
 }
 
 typealias ChatMessage = com.example.ai.inference.ChatMessage
@@ -190,12 +197,30 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     val scanPipelineMessage = apkScanPipeline.statusMessage
     val currentScanResult = apkScanPipeline.currentResult
 
-    // File 5: Real Scan History, Search, Filters & Persistence Management
+    // Real APK Import & Validation Pipeline (Safely validates SAF URIs and APK structure)
+    val importPipeline = com.example.ui.apk.scanner.ApkImportPipeline(context)
+    private val _latestImportResult = MutableStateFlow<com.example.ui.apk.scanner.ApkImportResult?>(null)
+    val latestImportResult: StateFlow<com.example.ui.apk.scanner.ApkImportResult?> = _latestImportResult.asStateFlow()
+
+    // Batch Scan Automation Manager
+    val batchScanManager = BatchScanManager(context, apkScanPipeline)
+
+    // Diff tool states
+    private val _diffApk1 = MutableStateFlow<ApkScanResult?>(null)
+    val diffApk1: StateFlow<ApkScanResult?> = _diffApk1.asStateFlow()
+
+    private val _diffApk2 = MutableStateFlow<ApkScanResult?>(null)
+    val diffApk2: StateFlow<ApkScanResult?> = _diffApk2.asStateFlow()
+
+    // File 5 & 9: Real Scan History, Search, Filters, Sorting & Persistence Management
     val allScans: StateFlow<List<ApkScanEntity>> = database.apkScanDao().getAllScans()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _scanFilter = MutableStateFlow(ScanFilter.ALL)
     val scanFilter: StateFlow<ScanFilter> = _scanFilter.asStateFlow()
+
+    private val _scanSortOption = MutableStateFlow(ScanSortOption.TIMESTAMP_DESC)
+    val scanSortOption: StateFlow<ScanSortOption> = _scanSortOption.asStateFlow()
 
     private val _scanSearchQuery = MutableStateFlow("")
     val scanSearchQuery: StateFlow<String> = _scanSearchQuery.asStateFlow()
@@ -203,8 +228,9 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
     val filteredScans: StateFlow<List<ApkScanEntity>> = combine(
         allScans,
         _scanFilter,
-        _scanSearchQuery
-    ) { scans, filter, query ->
+        _scanSearchQuery,
+        _scanSortOption
+    ) { scans, filter, query, sort ->
         var list = when (filter) {
             ScanFilter.ALL -> scans
             ScanFilter.COMPLETED -> scans.filter { it.status.equals("COMPLETED", ignoreCase = true) }
@@ -220,7 +246,14 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
                 it.packageName.lowercase().contains(q)
             }
         }
-        list
+        when (sort) {
+            ScanSortOption.TIMESTAMP_DESC -> list.sortedByDescending { it.timestamp }
+            ScanSortOption.TIMESTAMP_ASC -> list.sortedBy { it.timestamp }
+            ScanSortOption.FILE_SIZE_DESC -> list.sortedByDescending { it.fileSize }
+            ScanSortOption.FILE_SIZE_ASC -> list.sortedBy { it.fileSize }
+            ScanSortOption.FINDINGS_COUNT_DESC -> list.sortedByDescending { it.securityFindingCount }
+            ScanSortOption.NAME_ASC -> list.sortedBy { it.fileName.lowercase() }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val dashboardStats: StateFlow<DashboardStatistics> = allScans.map { scans ->
@@ -416,9 +449,9 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
             val start = System.currentTimeMillis()
             try {
                 val apkFile = scannerService.generateSampleApk(appName)
-                val scanResult = apkScanPipeline.scanFromFile(apkFile)
+                val scanResult = apkScanPipeline.scanFromFile(apkFile, fileNameHint = apkFile.name)
                 scanResult.onSuccess { result ->
-                    val info = scannerService.toApkInfo(result, apkFile)
+                    val info = scannerService.toApkInfo(result, apkFile).copy(isSample = true)
                     _currentApk.value = info
                     _stagedFileName.value = apkFile.name
                     _stagedFileSize.value = apkFile.length()
@@ -462,10 +495,42 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
             _selectedTab.value = AppTab.APK_LAB
             val start = System.currentTimeMillis()
             try {
-                val scanResult = apkScanPipeline.scanFromUri(context, uri, fileName)
+                // Step 1: Execute real APK import & validation pipeline
+                val importResult = importPipeline.importAndValidate(uri, fileName)
+                _latestImportResult.value = importResult
+
+                if (!importResult.success) {
+                    val errorMsg = if (importResult.errors.isNotEmpty()) {
+                        "[${importResult.errorCode}] ${importResult.errors.joinToString("; ")}"
+                    } else {
+                        "[${importResult.errorCode}] File rejected by APK validation pipeline."
+                    }
+                    _scanError.value = errorMsg
+                    val dur = System.currentTimeMillis() - start
+                    diagnosticsEngine.trackApkOperation(
+                        operationType = "IMPORT",
+                        durationMs = dur,
+                        success = false,
+                        module = "ApkImportPipeline",
+                        errorMessage = errorMsg
+                    )
+                    return@launch
+                }
+
+                _stagedFileName.value = importResult.fileName
+                _stagedFileSize.value = importResult.fileSize
+
+                // Step 2: Feed validated staged APK to deep scanning & Room persistence
+                val stagedApk = importResult.stagedFile
+                val scanResult = if (stagedApk != null && stagedApk.exists()) {
+                    apkScanPipeline.scanFromFile(stagedApk, fileNameHint = importResult.fileName)
+                } else {
+                    apkScanPipeline.scanFromUri(context, uri, importResult.fileName)
+                }
+
                 scanResult.onSuccess { result ->
-                    val apkFile = java.io.File(context.cacheDir, "apk_scans/${result.scanId}.apk")
-                    val info = scannerService.toApkInfo(result, apkFile)
+                    val apkFile = stagedApk ?: java.io.File(context.cacheDir, "apk_scans/${result.scanId}.apk")
+                    val info = scannerService.toApkInfo(result, apkFile).copy(isSample = false)
                     _currentApk.value = info
                     _stagedFileSize.value = result.fileInfo.fileSize
                     saveProjectRecord(info)
@@ -477,7 +542,7 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
                         durationMs = dur,
                         success = true,
                         artifactSizeBytes = info.fileSize,
-                        module = "ApkScanPipeline"
+                        module = "ApkImportPipeline"
                     )
                 }.onFailure { e ->
                     _scanError.value = e.message ?: "Failed to analyze APK archive"
@@ -486,7 +551,7 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
                         operationType = "IMPORT",
                         durationMs = dur,
                         success = false,
-                        module = "ApkScanPipeline",
+                        module = "ApkImportPipeline",
                         errorMessage = e.message
                     )
                 }
@@ -498,12 +563,112 @@ class WorkbenchViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun importApkFromFile(file: java.io.File, fileName: String? = null) {
+        activeScanJob?.cancel()
+        activeScanJob = viewModelScope.launch {
+            _isScanning.value = true
+            _scanError.value = null
+            _stagedFileName.value = fileName ?: file.name
+            _selectedTab.value = AppTab.APK_LAB
+            val start = System.currentTimeMillis()
+            try {
+                val importResult = importPipeline.importAndValidateFile(file, fileName)
+                _latestImportResult.value = importResult
+
+                if (!importResult.success) {
+                    val errorMsg = "[${importResult.errorCode}] ${importResult.errors.joinToString("; ")}"
+                    _scanError.value = errorMsg
+                    diagnosticsEngine.trackApkOperation(
+                        operationType = "IMPORT",
+                        durationMs = System.currentTimeMillis() - start,
+                        success = false,
+                        module = "ApkImportPipeline",
+                        errorMessage = errorMsg
+                    )
+                    return@launch
+                }
+
+                _stagedFileName.value = importResult.fileName
+                _stagedFileSize.value = importResult.fileSize
+
+                val scanResult = apkScanPipeline.scanFromFile(file, fileNameHint = importResult.fileName)
+                scanResult.onSuccess { result ->
+                    val info = scannerService.toApkInfo(result, file).copy(isSample = false)
+                    _currentApk.value = info
+                    saveProjectRecord(info)
+                    runDianaAnalysis(info)
+                    _apkLabSubTab.value = ApkLabSubTab.OVERVIEW
+                }.onFailure { e ->
+                    _scanError.value = e.message ?: "Failed to analyze APK file"
+                }
+            } catch (e: Exception) {
+                _scanError.value = e.message ?: "Unexpected error during APK file import"
+            } finally {
+                _isScanning.value = false
+            }
+        }
+    }
+
     fun selectScanFilter(filter: ScanFilter) {
         _scanFilter.value = filter
     }
 
+    fun selectScanSortOption(sort: ScanSortOption) {
+        _scanSortOption.value = sort
+    }
+
     fun setScanSearchQuery(query: String) {
         _scanSearchQuery.value = query
+    }
+
+    fun setDiffApk1(scanResult: ApkScanResult?) {
+        _diffApk1.value = scanResult
+    }
+
+    fun setDiffApk2(scanResult: ApkScanResult?) {
+        _diffApk2.value = scanResult
+    }
+
+    fun selectForDiff(scan: ApkScanEntity) {
+        val result = ScanReportExporter.fromEntity(scan)
+        if (_diffApk1.value == null) {
+            _diffApk1.value = result
+        } else if (_diffApk2.value == null) {
+            _diffApk2.value = result
+        } else {
+            // Cycle: replace first with second, new as second
+            _diffApk1.value = _diffApk2.value
+            _diffApk2.value = result
+        }
+    }
+
+    fun clearDiffSelection() {
+        _diffApk1.value = null
+        _diffApk2.value = null
+    }
+
+    fun bulkDeleteScans(scanIds: List<String>) {
+        if (scanIds.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                database.apkScanDao().bulkDeleteScans(scanIds)
+                if (_selectedHistoryScan.value?.scanId in scanIds) {
+                    _selectedHistoryScan.value = null
+                }
+                if (currentScanResult.value?.scanId in scanIds) {
+                    apkScanPipeline.setCurrentResult(null)
+                    _currentApk.value = null
+                }
+                scanIds.forEach { id ->
+                    try {
+                        val tempCache = java.io.File(context.cacheDir, "apk_scans/$id.apk")
+                        if (tempCache.exists()) tempCache.delete()
+                    } catch (_: Exception) {}
+                }
+            } catch (e: Exception) {
+                _scanError.value = "Failed to bulk delete scans: ${e.message}"
+            }
+        }
     }
 
     fun selectHistoryScan(scan: ApkScanEntity) {

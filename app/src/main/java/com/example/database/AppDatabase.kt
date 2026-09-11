@@ -68,6 +68,12 @@ interface ApkScanDao {
     @Query("DELETE FROM apk_scans WHERE scanId = :scanId")
     suspend fun deleteScan(scanId: String)
 
+    @Query("DELETE FROM apk_scans WHERE scanId IN (:scanIds)")
+    suspend fun bulkDeleteScans(scanIds: List<String>): Int
+
+    @Query("DELETE FROM apk_scans WHERE timestamp < :cutoffTimestamp")
+    suspend fun deleteScansOlderThan(cutoffTimestamp: Long): Int
+
     @Query("SELECT * FROM apk_scans WHERE status = 'COMPLETED' ORDER BY timestamp DESC")
     fun getCompletedScans(): Flow<List<ApkScanEntity>>
 

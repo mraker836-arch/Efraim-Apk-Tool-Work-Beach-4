@@ -88,6 +88,8 @@ import com.example.security.model.SecurityFinding
 import com.example.security.model.SecuritySeverity
 import com.example.ui.ApkLabSubTab
 import com.example.ui.WorkbenchViewModel
+import com.example.ui.components.ApkDiffViewer
+import com.example.ui.components.BatchScanSection
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CrimsonError
 import com.example.ui.theme.CyberCyan
@@ -112,6 +114,16 @@ fun ApkLabScreen(
     val subTab by viewModel.apkLabSubTab.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val currentScanResult by viewModel.currentScanResult.collectAsState()
+    val diffApk1 by viewModel.diffApk1.collectAsState()
+    val diffApk2 by viewModel.diffApk2.collectAsState()
+
+    val batchPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<android.net.Uri> ->
+        if (uris.isNotEmpty()) {
+            viewModel.batchScanManager.enqueue(uris)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -205,6 +217,24 @@ fun ApkLabScreen(
             ApkLabSubTab.HISTORY -> {
                 ApkHistoryTab(viewModel = viewModel, onImportApkClick = onImportApkClick)
             }
+            ApkLabSubTab.BATCH -> {
+                Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                    BatchScanSection(
+                        batchManager = viewModel.batchScanManager,
+                        onSelectMultipleApksClick = {
+                            batchPickerLauncher.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
+                        }
+                    )
+                }
+            }
+            ApkLabSubTab.DIFF -> {
+                Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                    ApkDiffViewer(
+                        apk1 = diffApk1 ?: currentScanResult,
+                        apk2 = diffApk2
+                    )
+                }
+            }
         }
     }
 }
@@ -288,17 +318,34 @@ fun ApkOverviewTab(
                             Text(apk.appName, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                             Text(apk.packageName, fontSize = 12.sp, color = CyberCyan, fontFamily = FontFamily.Monospace)
                         }
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (apk.signingStatus != com.example.apk.model.SigningStatus.UNSIGNED) NeonEmerald.copy(alpha = 0.15f) else AmberWarning.copy(alpha = 0.15f)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = apk.signingStatus.name,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (apk.signingStatus != com.example.apk.model.SigningStatus.UNSIGNED) NeonEmerald else AmberWarning,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (apk.isSample) AmberWarning.copy(alpha = 0.15f) else NeonEmerald.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = if (apk.isSample) "SAMPLE APK" else "REAL APK",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (apk.isSample) AmberWarning else NeonEmerald,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (apk.signingStatus != com.example.apk.model.SigningStatus.UNSIGNED) NeonEmerald.copy(alpha = 0.15f) else AmberWarning.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = apk.signingStatus.name,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (apk.signingStatus != com.example.apk.model.SigningStatus.UNSIGNED) NeonEmerald else AmberWarning,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
 

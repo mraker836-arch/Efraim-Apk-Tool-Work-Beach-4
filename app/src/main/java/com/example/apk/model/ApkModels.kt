@@ -30,7 +30,9 @@ data class ComponentInfo(
     val simpleName: String = name.substringAfterLast("."),
     val exported: Boolean = false,
     val permission: String? = null,
-    val intentActions: List<String> = emptyList()
+    val intentActions: List<String> = emptyList(),
+    val isEnabled: Boolean = true,
+    val intentCategories: List<String> = emptyList()
 )
 
 data class DexFileInfo(
@@ -101,7 +103,8 @@ data class APKInfo(
     val certificates: List<CertificateInfo> = emptyList(),
     val signingStatus: SigningStatus = SigningStatus.UNSIGNED,
     val importedAt: Long = System.currentTimeMillis(),
-    val totalEntriesCount: Int = 0
+    val totalEntriesCount: Int = 0,
+    val isSample: Boolean = false
 ) {
     val totalDexClasses: Int get() = dexFiles.sumOf { it.classDefsCount }
     val supportedAbis: List<String> get() = nativeLibraries.keys.toList()

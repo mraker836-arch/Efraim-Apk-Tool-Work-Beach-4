@@ -162,5 +162,13 @@ data class ApkScanResult(
     val securityFindings: List<SecurityFinding>,
     val status: ScanStatus,
     val errorMessage: String? = null,
-    val completedAt: Long = System.currentTimeMillis()
+    val completedAt: Long = System.currentTimeMillis(),
+    val resourceStrings: List<String> = emptyList(),
+    val isSample: Boolean = false,
+    val scanDurationMs: Long = 0L,
+    val scannerVersion: String = "2.5.0-static-deep",
+    val signatureInfo: SignatureInfo? = null,
+    val scanSummary: ScanSummary? = null,
+    val deepRiskFindings: List<RiskFinding> = emptyList(),
+    val deepScanResult: ScanResult? = null
 )

@@ -67,6 +67,29 @@ class ApkScannerService(private val context: Context) {
             )
         }
 
+        val assetsList = scanResult.fileInfo.archiveEntries
+            .filter { it.name.startsWith("assets/") && !it.isDirectory }
+            .map {
+                AssetFileInfo(
+                    path = it.name,
+                    sizeBytes = it.uncompressedSize,
+                    isCompressed = it.compressedSize < it.uncompressedSize
+                )
+            }
+
+        val resourcesList = scanResult.fileInfo.archiveEntries
+            .filter { it.name.startsWith("res/") && !it.isDirectory }
+            .map {
+                val type = it.name.substringAfter("res/").substringBefore("/", "unknown")
+                ResourceFileInfo(
+                    path = it.name,
+                    type = type,
+                    sizeBytes = it.uncompressedSize
+                )
+            }
+
+        val resolvedSigningStatus = scanResult.signatureInfo?.status ?: signingStatus
+
         return APKInfo(
             id = scanResult.scanId,
             fileName = scanResult.fileInfo.fileName,
@@ -91,11 +114,12 @@ class ApkScannerService(private val context: Context) {
             providers = scanResult.manifestInfo.providers,
             dexFiles = dexFiles,
             nativeLibraries = nativeLibsMap,
-            assets = emptyList(),
-            resources = emptyList(),
+            assets = assetsList,
+            resources = resourcesList,
             certificates = legacyCerts,
-            signingStatus = signingStatus,
-            totalEntriesCount = scanResult.fileInfo.totalZipEntries
+            signingStatus = resolvedSigningStatus,
+            totalEntriesCount = scanResult.fileInfo.totalZipEntries,
+            isSample = scanResult.isSample
         )
     }
 
